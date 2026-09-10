@@ -1,0 +1,32 @@
+name: Validate desktop foundation
+on: [push, pull_request]
+jobs:
+  native-package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm package
+      - if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum pnpm test:packaged
+      - if: runner.os != 'Linux'
+        run: pnpm test:packaged
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-results-${{ matrix.os }}
+          path: test-results/

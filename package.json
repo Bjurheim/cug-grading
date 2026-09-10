@@ -1,0 +1,74 @@
+{
+  "name": "cards-under-glass",
+  "version": "0.1.0",
+  "description": "A local home for your card collection",
+  "author": "Cards Under Glass",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "out/main/index.js",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:desktop": "playwright test",
+    "build": "electron-vite build",
+    "package": "pnpm build && electron-builder --dir",
+    "dist": "pnpm build && electron-builder",
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "test:packaged": "node scripts/test-packaged.mjs",
+    "test:development": "node scripts/test-development.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "24.13.3",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.7",
+    "@vitejs/plugin-react": "5.2.0",
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "vite": "7.3.6"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "build": {
+    "appId": "com.cardsunderglass.desktop",
+    "productName": "Cards Under Glass",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.lifestyle"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility"
+    }
+  }
+}
