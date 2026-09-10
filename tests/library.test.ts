@@ -17,7 +17,7 @@ function fixture(t: TestContext): { folder: string; lib: Library } {
 }
 test('serial allocation is permanent, padded, unique and persists with blank metadata', t => {
   const { folder, lib } = fixture(t)
-  const a = lib.create(), b = lib.create()
+  const a = lib.create().card, b = lib.create().card
   assert.match(a.id, /^[0-9a-f-]{36}$/)
   assert.notEqual(a.id, b.id)
   assert.equal(a.serial, '0000000001'); assert.equal(b.serial, '0000000002')
@@ -28,41 +28,41 @@ test('serial allocation is permanent, padded, unique and persists with blank met
   const reopened = new Library(folder, 'installation-a')
   try {
     assert.equal(reopened.list(0).cards.find(c => c.id === a.id)?.notes, 'Line 1\nLine 2')
-    assert.equal(reopened.create().serial, '0000000003')
+    assert.equal(reopened.create().card.serial, '0000000003')
   } finally { reopened.close() }
 })
 test('range changes retain history, skip collisions and never change existing cards', t => {
   const { lib } = fixture(t)
-  const original = lib.create()
+  const original = lib.create().card
   lib.configure({ name: 'Renamed', start: 50001, end: 100000, next: 50001 })
-  assert.equal(lib.create().serial, '0000050001')
+  assert.equal(lib.create().card.serial, '0000050001')
   assert.equal(lib.info().history.filter(r => r.retiredAt).length, 1)
   assert.equal(lib.list(0).cards.find(c => c.id === original.id)?.serial, original.serial)
-  assert.throws(() => lib.configure({ name: 'A', start: 1, end: 10, next: 1 }), /already belongs/)
+  assert.throws(() => lib.configure({ name: 'A', start: 1, end: 10, next: 1 }), /permanently reserved/)
   lib.configure({ name: 'A', start: 1, end: 60000, next: 50000 })
-  assert.equal(lib.create().serial, '0000050000'); assert.equal(lib.create().serial, '0000050002')
+  assert.equal(lib.create().card.serial, '0000050000'); assert.equal(lib.create().card.serial, '0000050002')
 })
 test('exhaustion rolls back and allocation can be replaced', t => {
   const { lib } = fixture(t)
   lib.configure({ name: 'A', start: 9999999999, end: 9999999999, next: 9999999999 })
-  assert.equal(lib.create().serial, '9999999999')
+  assert.equal(lib.create().card.serial, '9999999999')
   assert.throws(() => lib.create(), /exhausted/)
   assert.equal(lib.list(0).total, 1)
   lib.configure({ name: 'A', start: 2, end: 3, next: 2 })
-  assert.equal(lib.create().serial, '0000000002')
+  assert.equal(lib.create().card.serial, '0000000002')
 })
 test('database enforces immutable identity and unique serials even outside app service', t => {
-  const { lib, folder } = fixture(t); const card = lib.create()
+  const { lib, folder } = fixture(t); const card = lib.create().card
   const db = new DatabaseSync(join(folder, 'catalogue.sqlite'))
   try {
     assert.throws(() => db.prepare('UPDATE cards SET serial=? WHERE id=?').run('0000000008', card.id), /permanent/)
     assert.throws(() => db.prepare('UPDATE cards SET id=? WHERE id=?').run('another', card.id), /permanent/)
-    assert.throws(() => db.exec("INSERT INTO cards(id,serial,allocationId,createdAt,updatedAt) SELECT 'another',serial,allocationId,createdAt,updatedAt FROM cards"), /UNIQUE/)
-    assert.throws(() => db.exec("INSERT INTO cards(id,serial,allocationId,createdAt,updatedAt) SELECT 'zero','0000000000',allocationId,createdAt,updatedAt FROM cards"), /CHECK/)
+    assert.throws(() => db.exec("INSERT INTO cards(id,serial,allocationId,createdAt,updatedAt) SELECT 'another',serial,allocationId,createdAt,updatedAt FROM cards"), /reservation/)
+    assert.throws(() => db.exec("INSERT INTO cards(id,serial,allocationId,createdAt,updatedAt) SELECT 'zero','0000000000',allocationId,createdAt,updatedAt FROM cards"), /CHECK|reservation/)
   } finally { db.close() }
 })
 test('invalid input and stale revisions cannot overwrite saved data', t => {
-  const { lib } = fixture(t); const card = lib.create()
+  const { lib } = fixture(t); const card = lib.create().card
   lib.save(card.id, 0, { ...blank(), cardName: 'Kept' })
   assert.throws(() => lib.save(card.id, 0, { ...blank(), cardName: 'Lost' }), /changed elsewhere/)
   assert.throws(() => lib.save(card.id, 1, { ...blank(), serial: '123' }), /Unsupported/)
@@ -76,8 +76,8 @@ test('migrations are idempotent, transactional, and reject future versions', () 
   const db = new DatabaseSync(':memory:')
   try {
     migrate(db); migrate(db)
-    assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()!.n, 1)
-    db.exec("INSERT INTO schema_migrations VALUES (2,'future')")
+    assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()!.n, 4)
+    db.exec("INSERT INTO schema_migrations VALUES (5,'future')")
     assert.throws(() => migrate(db), /unsupported schema/)
   } finally { db.close() }
   const broken = new DatabaseSync(':memory:')
@@ -96,7 +96,7 @@ test('installations require their own allocation and cannot overlap other record
     assert.throws(() => second.create(), /Configure/)
     assert.throws(() => second.configure({ name: 'B', start: 1, end: 50000, next: 2 }), /overlaps/)
     second.configure({ name: 'B', start: 50001, end: 100000, next: 50001 })
-    assert.equal(second.create().serial, '0000050001')
+    assert.equal(second.create().card.serial, '0000050001')
   } finally { second.close() }
 })
 test('bounded pages and safe folder selection', t => {
@@ -117,6 +117,6 @@ test('failed card insert rolls back the serial pointer along with the card', t =
     assert.equal(lib.info().allocation!.next, 1)
     assert.equal(lib.list(0).total, 0)
     db.exec('DROP TRIGGER simulate_failure')
-    assert.equal(lib.create().serial, '0000000001')
+    assert.equal(lib.create().card.serial, '0000000001')
   } finally { db.close() }
 })

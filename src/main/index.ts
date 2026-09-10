@@ -1,12 +1,14 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, session } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, session } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { Library } from './library'
+import { Library, validatePhotoSlot } from './library'
+import { writePhotoThumbnail } from './photos'
 import type { Result } from '../shared/contracts'
 
 if (process.argv.includes('--cug-test') && process.env.CUG_TEST_PROFILE) app.setPath('userData', process.env.CUG_TEST_PROFILE)
+protocol.registerSchemesAsPrivileged([{ scheme: 'cug-media', privileges: { standard: true, secure: true, supportFetchAPI: true } }])
 interface Preferences { installationId: string; libraryFolder?: string }
 let preferences: Preferences
 let library: Library | undefined
@@ -41,7 +43,7 @@ async function start(): Promise<void> {
   } else persistPreferences({ installationId: randomUUID() })
   let startupError: string | undefined
   if (preferences.libraryFolder) {
-    try { library = new Library(preferences.libraryFolder, preferences.installationId) }
+    try { library = new Library(preferences.libraryFolder, preferences.installationId, false, writePhotoThumbnail) }
     catch (e) { startupError = `Could not reopen your library. Your files have not been replaced.\n${String(e)}` }
   }
   register('library:info', () => library?.info() ?? null)
@@ -51,7 +53,7 @@ async function start(): Promise<void> {
     if (selected.canceled || !selected.filePaths[0]) return null
     const folder = selected.filePaths[0]
     if (!create && library?.folder === folder) return library.info()
-    const candidate = new Library(folder, preferences.installationId, create)
+    const candidate = new Library(folder, preferences.installationId, create, writePhotoThumbnail)
     try { persistPreferences({ ...preferences, libraryFolder: folder }) }
     catch (e) { candidate.close(); throw e }
     library?.close(); library = candidate
@@ -59,15 +61,53 @@ async function start(): Promise<void> {
   })
   register('library:configure', setup => active().configure(setup))
   register('cards:list', offset => active().list(offset))
+  register('cards:get', id => active().get(id))
   register('cards:create', () => active().create())
   register('cards:save', (id, revision, metadata) => active().save(id, revision, metadata))
+  register('inspection:save', (id, revision, inspection) => active().saveInspection(id, revision, inspection))
+  register('cards:include-public', (id, revision, include) => active().setIncludePublic(id, revision, include))
+  register('markers:add', (cardId, side, x, y) => active().addMarker(cardId, side, x, y))
+  register('markers:save', (id, note) => active().saveMarker(id, note))
+  register('markers:remove', id => active().removeMarker(id))
+  register('photos:choose', async (cardId, slot) => {
+    validatePhotoSlot(slot)
+    active().get(cardId)
+    const selected = await dialog.showOpenDialog(window!, {
+      title: slot === null ? 'Add photos' : 'Choose a photo',
+      properties: slot === null ? ['openFile', 'multiSelections'] : ['openFile'],
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'webp'] }]
+    })
+    if (selected.canceled || !selected.filePaths.length) return null
+    return active().importPhotos(cardId, slot, selected.filePaths)
+  })
+  register('photos:import', (cardId, slot, paths) => active().importPhotos(cardId, slot, paths))
+  register('photos:title', (id, title) => active().savePhotoTitle(id, title))
+  register('photos:lock', (id, locked) => active().setPhotoLocked(id, locked))
+  register('photos:markers', (id, markerIds) => active().setPhotoMarkers(id, markerIds))
+  register('photos:remove', id => active().removePhoto(id))
+  register('cards:finalize', (id, revision) => active().finalize(id, revision))
+  register('cards:delete', id => active().delete(id))
   register('app:flushed', ok => { finishFlush?.(ok === true); return null })
-  Menu.setApplicationMenu(process.platform === 'darwin' ? Menu.buildFromTemplate([
-    { label: 'Cards Under Glass', submenu: [{ label: 'Quit Cards Under Glass', click: () => window?.close() }] },
+  Menu.setApplicationMenu(Menu.buildFromTemplate(process.platform === 'darwin' ? [
+    { label: 'Cards Under Glass', submenu: [
+      { role: 'about' }, { type: 'separator' }, { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' },
+      { type: 'separator' }, { id: 'quit-app', label: 'Quit Cards Under Glass', accelerator: 'Command+Q', click: () => window?.close() }
+    ] },
     { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] }
-  ]) : null)
+  ] : [
+    { label: 'File', submenu: [{ id: 'quit-app', label: 'Quit', accelerator: 'Alt+F4', click: () => window?.close() }] },
+    { label: 'Edit', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] }
+  ]))
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
   session.defaultSession.setPermissionCheckHandler(() => false)
+  await protocol.handle('cug-media', async request => {
+    try {
+      const url = new URL(request.url), variant = url.hostname
+      if (request.method !== 'GET' || (variant !== 'thumbnail' && variant !== 'original') || !url.pathname.startsWith('/') || url.pathname.slice(1).includes('/')) throw new Error('Invalid media request.')
+      const path = await active().photoFile(decodeURIComponent(url.pathname.slice(1)), variant)
+      return net.fetch(pathToFileURL(path).href)
+    } catch { return new Response('', { status: 404 }) }
+  })
   window = new BrowserWindow({
     width: 1400, height: 920, minWidth: 1000, minHeight: 700, backgroundColor: '#111517',
     title: 'Cards Under Glass',
@@ -87,7 +127,12 @@ async function start(): Promise<void> {
         finishFlush = result => { clearTimeout(timer); finishFlush = undefined; resolve(result) }
         window!.webContents.send('app:flush')
       })
-      if (ok) { closeAllowed = true; window!.close() }
+      if (ok) {
+        closeAllowed = true
+        // Closing the now-authorized window completes both normal window closes and
+        // an interrupted app.quit()/Command+Q request through window-all-closed.
+        window!.close()
+      }
       else { closing = false; await dialog.showMessageBox(window!, { type: 'error', message: 'Your edits could not be saved.', detail: 'The app will stay open. Resolve the save error and try closing again.', buttons: ['Keep working'] }) }
     })()
   })
