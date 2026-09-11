@@ -50,8 +50,12 @@ test('photo imports copy originals, create thumbnails, persist titles and replac
   const additionalSource = image('detail.webp', 'ADDITIONAL')
   detail = await lib.importPhotos(card.card.id, null, [additionalSource])
   const additional = detail.photos.find(photo => photo.slot === null)!
-  assert.equal(lib.savePhotoTitle(additional.id, 'Foil scratch').title, 'Foil scratch')
+  const additionalOriginal = await lib.photoFile(additional.id, 'original')
+  const renamed = lib.savePhotoTitle(additional.id, 'Foil scratch')
+  assert.equal(renamed.title, 'Foil scratch'); assert.equal(renamed.originalFilename, 'detail.webp')
+  assert.equal(await lib.photoFile(additional.id, 'original'), additionalOriginal)
   assert.equal(lib.savePhotoTitle(additional.id, '   ').title, null)
+  assert.equal(await lib.photoFile(additional.id, 'original'), additionalOriginal)
 
   const replacementSource = image('replacement.jpg', 'ORIGINAL_TWO')
   detail = await lib.importPhotos(card.card.id, 'full_front', [replacementSource])

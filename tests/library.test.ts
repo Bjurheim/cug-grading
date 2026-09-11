@@ -103,10 +103,22 @@ test('bounded pages and safe folder selection', t => {
   const { lib, folder } = fixture(t)
   for (let i = 0; i < 105; i++) lib.create()
   assert.equal(lib.list(0).cards.length, 100); assert.equal(lib.list(100).cards.length, 5)
+  assert.equal(lib.list(0).cards[0].serial, '0000000105')
+  assert.equal(lib.list(100).cards[4].serial, '0000000001')
   assert.equal(lib.list(0).total, 105)
   assert.throws(() => lib.list(-1), /Invalid page/)
   assert.throws(() => new Library(folder, 'a', true), /empty folder/)
   assert.throws(() => new Library(join(folder, 'missing'), 'a'), /No Cards/)
+})
+test('library order is permanent serial descending and ignores later edits', t => {
+  const { lib } = fixture(t)
+  const first = lib.create().card
+  lib.create(); lib.create()
+  assert.deepEqual(lib.list(0).cards.map(card => card.serial), ['0000000003', '0000000002', '0000000001'])
+  lib.save(first.id, first.revision, { ...blank(), cardName: 'Edited after newer cards' })
+  assert.deepEqual(lib.list(0).cards.map(card => card.serial), ['0000000003', '0000000002', '0000000001'])
+  assert.equal(lib.create().card.serial, '0000000004')
+  assert.deepEqual(lib.list(0).cards.map(card => card.serial), ['0000000004', '0000000003', '0000000002', '0000000001'])
 })
 test('failed card insert rolls back the serial pointer along with the card', t => {
   const { lib, folder } = fixture(t)

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   fields, gradeFields, PAGE_SIZE, photoMediaUrl, photoSlots, serialText,
@@ -13,6 +13,8 @@ import './style.css'
 declare global { interface Window { cards: Api } }
 const unwrap = <T,>(result: Result<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const stateLabel = (card: Card): string => ({ in_progress: 'In Progress', finalized: 'Finalized', changes_pending: 'Finalized — changes pending' })[card.finalizationState]
+type Workspace = 'library' | 'grading' | 'settings'
+type CardSection = 'overview' | 'inspection' | 'photos'
 
 function App(): React.JSX.Element {
   const [info, setInfo] = useState<LibraryInfo | null>(null)
@@ -20,15 +22,19 @@ function App(): React.JSX.Element {
   const [cards, setCards] = useState<Card[]>([])
   const [total, setTotal] = useState(0)
   const [offset, setOffset] = useState(0)
-  const [selected, setSelected] = useState<CardDetail | null>(null)
-  const [section, setSection] = useState<'overview' | 'inspection' | 'photos'>('overview')
-  const [settings, setSettings] = useState(false)
+  const [workspace, setWorkspace] = useState<Workspace>('library')
+  const [librarySelectedCard, setLibrarySelectedCard] = useState<CardDetail | null>(null)
+  const [activeGradingCard, setActiveGradingCard] = useState<CardDetail | null>(null)
+  const [section, setSection] = useState<CardSection>('overview')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [saveError, setSaveError] = useState('')
   const editor = useRef<CardAutosave | null>(null)
   const actionLock = useRef(false)
+  const workspaceScroll = useRef<HTMLDivElement | null>(null)
+  const libraryScrollTop = useRef(0)
+  const gradingScrollTop = useRef<Record<CardSection, number>>({ overview: 0, inspection: 0, photos: 0 })
 
   async function refresh(page = offset): Promise<void> {
     const result = unwrap(await window.cards.list(page))
@@ -37,11 +43,32 @@ function App(): React.JSX.Element {
 
   useEffect(() => {
     void (async () => {
-      try { const data = unwrap(await window.cards.info()); setInfo(data); if (data) { setSettings(!data.allocation); await refresh(0) } }
+      try { const data = unwrap(await window.cards.info()); setInfo(data); if (data) { setWorkspace(data.allocation ? 'library' : 'settings'); await refresh(0) } }
       catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)) } finally { setReady(true) }
     })()
     return window.cards.onFlush(async () => !editor.current || await editor.current.flush())
   }, [])
+
+  useLayoutEffect(() => {
+    const viewport = workspaceScroll.current
+    if (!viewport) return
+    viewport.scrollTop = workspace === 'library' ? libraryScrollTop.current : workspace === 'grading' ? gradingScrollTop.current[section] : 0
+    if (workspace === 'library' && librarySelectedCard) {
+      requestAnimationFrame(() => {
+        const row = viewport.querySelector<HTMLElement>(`[data-card-id="${librarySelectedCard.card.id}"]`)
+        if (!row) return
+        const viewportRect = viewport.getBoundingClientRect(), rowRect = row.getBoundingClientRect()
+        if (rowRect.top < viewportRect.top || rowRect.bottom > viewportRect.bottom) row.scrollIntoView({ block: 'nearest' })
+        libraryScrollTop.current = viewport.scrollTop
+      })
+    }
+  }, [workspace, section, librarySelectedCard?.card.id])
+
+  function rememberScroll(): void {
+    const top = workspaceScroll.current?.scrollTop ?? 0
+    if (workspace === 'library') libraryScrollTop.current = top
+    else if (workspace === 'grading') gradingScrollTop.current[section] = top
+  }
 
   async function act(action: () => Promise<void>): Promise<void> {
     if (actionLock.current) return
@@ -51,33 +78,55 @@ function App(): React.JSX.Element {
     finally { actionLock.current = false; setBusy(false) }
   }
 
-  function installEditor(detail: CardDetail, nextSection: 'overview' | 'inspection' | 'photos' = 'overview'): void {
+  function installEditor(detail: CardDetail, nextSection: CardSection = 'overview'): void {
+    if (activeGradingCard?.card.id !== detail.card.id) gradingScrollTop.current = { overview: 0, inspection: 0, photos: 0 }
     const next = new CardAutosave(detail, {
       metadata: async (id, revision, metadata) => unwrap(await window.cards.save(id, revision, metadata)),
       inspection: async (id, revision, inspection) => unwrap(await window.cards.saveInspection(id, revision, inspection)),
       marker: async (id, note) => unwrap(await window.cards.saveMarker(id, note)),
       photo: async (id, title) => unwrap(await window.cards.savePhotoTitle(id, title))
     }, (state, message) => { setSaveState(state); setSaveError(message ?? '') }, changed => {
-      setSelected({ ...changed, card: { ...changed.card }, inspection: { ...changed.inspection }, markers: [...changed.markers], photos: [...changed.photos] })
+      const copy = { ...changed, card: { ...changed.card }, inspection: { ...changed.inspection }, markers: [...changed.markers], photos: [...changed.photos] }
+      setActiveGradingCard(copy)
+      setLibrarySelectedCard(previous => previous?.card.id === changed.card.id ? copy : previous)
       setCards(previous => previous.map(card => card.id === changed.card.id ? changed.card : card))
     })
     editor.current = next
-    setSelected(detail); setSection(nextSection); setSaveState('saved'); setSaveError(''); setSettings(false)
+    setActiveGradingCard(detail); setSection(nextSection); setSaveState('saved'); setSaveError('')
   }
 
-  async function openCard(id: string, nextSection: 'overview' | 'inspection' | 'photos' = 'overview'): Promise<void> {
-    installEditor(unwrap(await window.cards.get(id)), nextSection)
+  async function previewCard(id: string): Promise<void> {
+    setLibrarySelectedCard(unwrap(await window.cards.get(id)))
+  }
+
+  async function openCardForGrading(id: string): Promise<void> {
+    rememberScroll()
+    if (activeGradingCard?.card.id !== id) installEditor(unwrap(await window.cards.get(id)))
+    setWorkspace('grading')
+  }
+
+  async function navigate(next: Workspace): Promise<void> {
+    rememberScroll()
+    if (next === 'settings') setInfo(unwrap(await window.cards.info()))
+    setWorkspace(next)
+  }
+
+  async function changeSection(next: CardSection): Promise<void> {
+    rememberScroll()
+    setSection(next)
   }
 
   async function choose(create: boolean): Promise<void> {
     const data = unwrap(await window.cards.chooseLibrary(create))
     if (!data) return
-    editor.current = null; setSelected(null); setInfo(data); setSettings(!data.allocation); await refresh(0)
+    editor.current = null; setActiveGradingCard(null); setLibrarySelectedCard(null)
+    libraryScrollTop.current = 0; gradingScrollTop.current = { overview: 0, inspection: 0, photos: 0 }
+    setInfo(data); setWorkspace(data.allocation ? 'library' : 'settings'); await refresh(0)
   }
 
   async function addMarker(side: DefectMarker['side'], x: number, y: number): Promise<void> {
-    if (!selected) return
-    const marker = unwrap(await window.cards.addMarker(selected.card.id, side, x, y))
+    if (!activeGradingCard) return
+    const marker = unwrap(await window.cards.addMarker(activeGradingCard.card.id, side, x, y))
     const detail = { ...editor.current!.detail, markers: [...editor.current!.detail.markers, marker] }
     editor.current!.replace(detail)
   }
@@ -88,14 +137,14 @@ function App(): React.JSX.Element {
   }
 
   async function choosePhotos(slot: PrimaryPhotoSlot | null): Promise<void> {
-    if (!selected) return
-    const detail = unwrap(await window.cards.choosePhotos(selected.card.id, slot))
+    if (!activeGradingCard) return
+    const detail = unwrap(await window.cards.choosePhotos(activeGradingCard.card.id, slot))
     if (detail) editor.current!.replace(detail)
   }
 
   async function importDroppedPhotos(slot: PrimaryPhotoSlot | null, files: File[]): Promise<void> {
-    if (!selected || !files.length) return
-    editor.current!.replace(unwrap(await window.cards.importDroppedPhotos(selected.card.id, slot, files)))
+    if (!activeGradingCard || !files.length) return
+    editor.current!.replace(unwrap(await window.cards.importDroppedPhotos(activeGradingCard.card.id, slot, files)))
   }
 
   async function setPhotoLocked(id: string, locked: boolean): Promise<void> {
@@ -114,35 +163,35 @@ function App(): React.JSX.Element {
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">▱</span><div>CARDS<br/><strong>UNDER GLASS</strong></div></div>
       <div className="eyebrow">YOUR WORKSPACE</div>
-      <button className={!settings ? 'nav active' : 'nav'} disabled={!info || busy} onClick={() => void act(async () => { setSettings(false); editor.current = null; setSelected(null); await refresh() })}><span>▤</span> Card library <small>{total}</small></button>
-      <button className={settings ? 'nav active' : 'nav'} disabled={!info || busy} onClick={() => void act(async () => { setInfo(unwrap(await window.cards.info())); editor.current = null; setSelected(null); setSettings(true) })}><span>⚙</span> Library settings</button>
+      <button aria-label="Card library" className={workspace === 'library' ? 'nav active' : 'nav'} disabled={!info || busy} onClick={() => void act(() => navigate('library'))}><span>▤</span> Card library <small>{total}</small></button>
+      <button aria-label="Card grading" className={workspace === 'grading' ? 'nav active' : 'nav'} disabled={!info || busy} onClick={() => void act(() => navigate('grading'))}><span>◇</span> Card grading {activeGradingCard && <small>{activeGradingCard.card.serial}</small>}</button>
+      <button aria-label="Library settings" className={workspace === 'settings' ? 'nav active' : 'nav'} disabled={!info || busy} onClick={() => void act(() => navigate('settings'))}><span>⚙</span> Library settings</button>
       <div className="sidebar-bottom"><span className="local-dot"/> LOCAL LIBRARY<p>Your collection.<br/>Right here, with you.</p>{info && <div className="folder" title={info.folder}>{info.folder}</div>}</div>
     </aside>
-    <main>
-      <header><div className="breadcrumb">Workspace <span>/</span> {settings ? 'Settings' : selected ? selected.card.serial : 'Card library'}</div><span className="private-label">◈ &nbsp; Local & private</span></header>
+    <main className={workspace === 'grading' ? 'grading-main' : ''}>
+      {workspace !== 'grading' && <header><div className="breadcrumb">Workspace <span>/</span> {workspace === 'settings' ? 'Library settings' : 'Card library'}</div><span className="private-label">◈ &nbsp; Local & private</span></header>}
+      <div className="workspace-scroll" ref={workspaceScroll}>
       {error && <div role="alert" className="error global-error">{error}<button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
-      {!ready ? <div className="welcome"><h1>Opening your workspace…</h1></div> : !info ? <Welcome busy={busy} choose={create => void act(() => choose(create))}/> : settings ?
-        <Settings key={info.folder + JSON.stringify(info.allocation)} info={info} busy={busy} onSubmit={setup => void act(async () => { setInfo(unwrap(await window.cards.configure(setup))); setSettings(false) })} onChoose={create => void act(() => choose(create))}/> : <>
-          <div className="page-heading"><div><div className="eyebrow">THE COLLECTION</div><h1>Card library <span className="count">{total}</span></h1><p>Every card has a place. The details can come later.</p></div><button className="primary" disabled={busy || !info.allocation} onClick={() => void act(async () => { installEditor(unwrap(await window.cards.create())); setInfo(unwrap(await window.cards.info())); await refresh(0) })}>＋ New card</button></div>
-          {!info.allocation && <div className="notice">Set up this workstation’s serial allocation in Library settings before creating cards.</div>}
-          <div className={selected ? 'collection with-editor' : 'collection'}>
-            <CardList cards={cards} total={total} offset={offset} busy={busy} selected={selected?.card.id} open={id => void act(() => openCard(id))} page={page => void act(() => refresh(page))}/>
-            {selected && <CardEditor detail={selected} section={section} busy={busy} saveState={saveState} saveError={saveError}
-              editor={editor.current!} setSection={next => void act(async () => setSection(next))}
-              close={() => void act(async () => { editor.current = null; setSelected(null); await refresh() })}
+      {!ready ? <div className="welcome"><h1>Opening your workspace…</h1></div> : !info ? <Welcome busy={busy} choose={create => void act(() => choose(create))}/> : workspace === 'settings' ?
+        <Settings key={info.folder + JSON.stringify(info.allocation)} info={info} busy={busy} onSubmit={setup => void act(async () => { setInfo(unwrap(await window.cards.configure(setup))); setWorkspace('library') })} onChoose={create => void act(() => choose(create))}/> : workspace === 'library' ?
+        <LibraryWorkspace cards={cards} total={total} offset={offset} busy={busy} canCreate={Boolean(info.allocation)} selected={librarySelectedCard}
+          select={id => void act(() => previewCard(id))} open={id => void act(() => openCardForGrading(id))}
+          page={page => void act(async () => { setLibrarySelectedCard(null); libraryScrollTop.current = 0; await refresh(page) })}
+          create={() => void act(async () => { const detail = unwrap(await window.cards.create()); installEditor(detail); setInfo(unwrap(await window.cards.info())); await refresh(offset); setWorkspace('grading') })}/>
+        : activeGradingCard && editor.current ? <div className="grading-workspace"><CardEditor detail={activeGradingCard} section={section} busy={busy} saveState={saveState} saveError={saveError}
+              editor={editor.current} setSection={next => void act(() => changeSection(next))}
               retry={() => void editor.current?.flush()}
-              setPublic={include => void act(async () => { const card = unwrap(await window.cards.setIncludePublic(selected.card.id, editor.current!.detail.card.revision, include)); editor.current!.replace({ ...editor.current!.detail, card }) })}
-              finalize={() => void act(async () => { setSection('inspection'); editor.current!.replace(unwrap(await window.cards.finalize(selected.card.id, editor.current!.detail.card.revision))); await refresh(offset) })}
-              deleteCard={() => void act(async () => { await window.cards.delete(selected.card.id).then(unwrap); editor.current = null; setSelected(null); await refresh(Math.max(0, Math.min(offset, Math.floor(Math.max(total - 2, 0) / PAGE_SIZE) * PAGE_SIZE))) })}
+              setPublic={include => void act(async () => { const card = unwrap(await window.cards.setIncludePublic(activeGradingCard.card.id, editor.current!.detail.card.revision, include)); editor.current!.replace({ ...editor.current!.detail, card }) })}
+              finalize={() => void act(async () => { await changeSection('inspection'); editor.current!.replace(unwrap(await window.cards.finalize(activeGradingCard.card.id, editor.current!.detail.card.revision))); await refresh(offset) })}
+              deleteCard={() => void act(async () => { const deletedId = activeGradingCard.card.id; await window.cards.delete(deletedId).then(unwrap); editor.current = null; setActiveGradingCard(null); setLibrarySelectedCard(previous => previous?.card.id === deletedId ? null : previous); await refresh(Math.max(0, Math.min(offset, Math.floor(Math.max(total - 2, 0) / PAGE_SIZE) * PAGE_SIZE))); setWorkspace('library') })}
               addMarker={(side, x, y) => void act(() => addMarker(side, x, y))}
               removeMarker={id => void act(() => removeMarker(id))}
               choosePhotos={slot => void act(() => choosePhotos(slot))}
               importDroppedPhotos={(slot, files) => void act(() => importDroppedPhotos(slot, files))}
               setPhotoLocked={(id, locked) => void act(() => setPhotoLocked(id, locked))}
               setPhotoMarkers={(id, markerIds) => void act(() => setPhotoMarkers(id, markerIds))}
-              removePhoto={id => void act(() => removePhoto(id))}/>}
-          </div>
-        </>}
+              removePhoto={id => void act(() => removePhoto(id))}/></div> : <GradingEmpty openLibrary={() => void act(() => navigate('library'))}/>}
+      </div>
     </main>
   </div>
 }
@@ -151,10 +200,24 @@ function Welcome({ busy, choose }: { busy: boolean; choose: (create: boolean) =>
   return <div className="welcome"><div className="hero-mark">▱</div><div className="eyebrow">A HOME FOR EVERY CARD</div><h1>A little order.<br/>A closer look.</h1><p>Catalogue your collection in a library you own.<br/>Start with a folder. Add the details at your own pace.</p><div className="actions"><button className="primary" disabled={busy} onClick={() => choose(true)}>Create a library</button><button disabled={busy} onClick={() => choose(false)}>Open existing library</button></div><small>Choose an empty local folder for a new library.</small></div>
 }
 
-function CardList({ cards, total, offset, busy, selected, open, page }: { cards: Card[]; total: number; offset: number; busy: boolean; selected?: string; open: (id: string) => void; page: (offset: number) => void }): React.JSX.Element {
+function LibraryWorkspace({ cards, total, offset, busy, canCreate, selected, select, open, page, create }: {
+  cards: Card[]; total: number; offset: number; busy: boolean; canCreate: boolean; selected: CardDetail | null
+  select: (id: string) => void; open: (id: string) => void; page: (offset: number) => void; create: () => void
+}): React.JSX.Element {
+  return <div className="library-workspace">
+    <div className="page-heading"><div><div className="eyebrow">THE COLLECTION</div><h1>Card library <span className="count">{total}</span></h1><p>Browse freely. A card changes in Card Grading only when you explicitly open it.</p></div><button className="primary" disabled={busy || !canCreate} onClick={create}>＋ New card</button></div>
+    {!canCreate && <div className="notice">Set up this workstation’s serial allocation in Library settings before creating cards.</div>}
+    <div className="library-layout">
+      <CardList cards={cards} total={total} offset={offset} busy={busy} selectedId={selected?.card.id} select={select} page={page}/>
+      <LibraryPreview detail={selected} busy={busy} open={open}/>
+    </div>
+  </div>
+}
+
+function CardList({ cards, total, offset, busy, selectedId, select, page }: { cards: Card[]; total: number; offset: number; busy: boolean; selectedId?: string; select: (id: string) => void; page: (offset: number) => void }): React.JSX.Element {
   return <section className="list-panel"><div className="panel-heading"><strong>All cards</strong><span>List view</span></div>
-    {cards.length === 0 ? <div className="empty"><div>▱</div><h2>Your collection starts here</h2><p>Create a card to give it a permanent serial.<br/>All identification details are optional.</p></div> : <div className="table-wrap"><table><thead><tr><th>Serial / Card</th><th>Game / Set</th><th>Grade / Status</th></tr></thead><tbody>{cards.map(card => <tr key={card.id} className={selected === card.id ? 'selected' : ''}>
-      <td><button className="card-link" disabled={busy} onClick={() => open(card.id)}><span className="serial">{card.serial}</span><strong>{card.cardName || 'Unnamed Card'}</strong></button></td>
+    {cards.length === 0 ? <div className="empty"><div>▱</div><h2>Your collection starts here</h2><p>Create a card to give it a permanent serial.<br/>All identification details are optional.</p></div> : <div className="table-wrap"><table><thead><tr><th>Serial / Card</th><th>Game / Set</th><th>Grade / Status</th></tr></thead><tbody>{cards.map(card => <tr key={card.id} className={selectedId === card.id ? 'selected' : ''}>
+      <td><button className="card-link" data-card-id={card.id} aria-pressed={selectedId === card.id} disabled={busy} onClick={() => select(card.id)}><span className="serial">{card.serial}</span><strong>{card.cardName || 'Unnamed Card'}</strong></button></td>
       <td><span>{card.game || '—'}</span><small>{card.setName || '—'}</small></td>
       <td><span>{formatGrade(card.estimatedGrade) || '—'}</span><small><span className={`status ${card.finalizationState}`}>{stateLabel(card)}</span></small></td>
     </tr>)}</tbody></table></div>}
@@ -162,9 +225,24 @@ function CardList({ cards, total, offset, busy, selected, open, page }: { cards:
   </section>
 }
 
+function LibraryPreview({ detail, busy, open }: { detail: CardDetail | null; busy: boolean; open: (id: string) => void }): React.JSX.Element {
+  if (!detail) return <aside className="library-preview empty-preview"><div className="preview-placeholder small-placeholder">▱</div><div><div className="eyebrow">CARD PREVIEW</div><h2>Select a card</h2><p>Choose any row to inspect a summary. Your active grading card will stay exactly as it is.</p></div></aside>
+  const front = detail.photos.find(photo => photo.slot === 'full_front')
+  return <aside className="library-preview" aria-label={`Preview ${detail.card.serial}`}>
+    <div className="preview-image">{front ? <img loading="lazy" src={photoMediaUrl(front.id, 'thumbnail')} alt={`Front of ${detail.card.cardName || detail.card.serial}`}/> : <div className="preview-placeholder"><span>▱</span><small>No front photo</small></div>}</div>
+    <div className="preview-copy"><div className="eyebrow">CARD PREVIEW</div><span className="serial preview-serial">{detail.card.serial}</span><h2>{detail.card.cardName || 'Unnamed Card'}</h2><div className="preview-meta"><span>{detail.card.game || 'No game/category'}</span><span>{detail.card.setName || 'No set'}</span></div><span className={`status ${detail.card.finalizationState}`}>{stateLabel(detail.card)}</span></div>
+    <div className="preview-grades">{(Object.keys(gradeFields) as GradeField[]).map(key => <div key={key}><small>{gradeFields[key]}</small><strong>{formatGrade(detail.inspection[key]) || '—'}</strong></div>)}</div>
+    <button className="primary open-card" disabled={busy} onClick={() => open(detail.card.id)}>Open card</button>
+  </aside>
+}
+
+function GradingEmpty({ openLibrary }: { openLibrary: () => void }): React.JSX.Element {
+  return <div className="grading-empty"><div className="preview-placeholder small-placeholder">◇</div><div className="eyebrow">CARD GRADING</div><h1>No card open</h1><p>Select a card in Card Library and use <strong>Open card</strong> when you are ready to work on it.</p><button className="primary" onClick={openLibrary}>Go to Card library</button></div>
+}
+
 interface CardEditorProps {
-  detail: CardDetail; section: 'overview' | 'inspection' | 'photos'; busy: boolean; saveState: SaveState; saveError: string; editor: CardAutosave
-  setSection: (section: 'overview' | 'inspection' | 'photos') => void; close: () => void; retry: () => void
+  detail: CardDetail; section: CardSection; busy: boolean; saveState: SaveState; saveError: string; editor: CardAutosave
+  setSection: (section: CardSection) => void; retry: () => void
   setPublic: (include: boolean) => void; finalize: () => void; deleteCard: () => void
   addMarker: (side: DefectMarker['side'], x: number, y: number) => void; removeMarker: (id: string) => void
   choosePhotos: (slot: PrimaryPhotoSlot | null) => void; importDroppedPhotos: (slot: PrimaryPhotoSlot | null, files: File[]) => void
@@ -173,10 +251,9 @@ interface CardEditorProps {
 
 function CardEditor(props: CardEditorProps): React.JSX.Element {
   const { detail, editor } = props
-  return <section className="editor"><div className="editor-heading"><div><div className="eyebrow">CARD WORKSPACE</div><h2><span className="serial">{detail.card.serial}</span><span className="card-identity">{detail.card.cardName || 'Unnamed Card'}</span></h2></div><button aria-label="Close card" disabled={props.busy} onClick={props.close}>×</button></div>
-    <div className="editor-tabs"><button className={props.section === 'overview' ? 'active' : ''} onClick={() => props.setSection('overview')}>Overview</button><button className={props.section === 'inspection' ? 'active' : ''} onClick={() => props.setSection('inspection')}>Inspection</button><button className={props.section === 'photos' ? 'active' : ''} onClick={() => props.setSection('photos')}>Photos</button></div>
-    <div className="save-line" role="status"><span className={`status ${detail.card.finalizationState}`}>{stateLabel(detail.card)}</span><span className={props.saveState === 'error' ? 'save-error' : ''}>{({ saved: '✓ All changes saved', saving: 'Saving…', unsaved: 'Unsaved changes…', error: 'Save failed' })[props.saveState]}</span></div>
-    {props.saveError && <div role="alert" className="error">{props.saveError}<button onClick={props.retry}>Retry save</button></div>}
+  return <section className="editor grading-editor"><div className="editor-chrome"><div className="editor-summary"><h2><span className="serial">{detail.card.serial}</span><span className="card-identity">{detail.card.cardName || 'Unnamed Card'}</span></h2><div className="editor-state"><span className={`status ${detail.card.finalizationState}`}>{stateLabel(detail.card)}</span><span className={props.saveState === 'error' ? 'save-state save-error' : 'save-state'} role="status">{({ saved: '✓ All changes saved', saving: 'Saving…', unsaved: 'Unsaved changes…', error: 'Save failed' })[props.saveState]}</span></div></div>
+    <div className="editor-tabs" aria-label="Card sections"><button className={props.section === 'overview' ? 'active' : ''} onClick={() => props.setSection('overview')}>Overview</button><button className={props.section === 'inspection' ? 'active' : ''} onClick={() => props.setSection('inspection')}>Inspection</button><button className={props.section === 'photos' ? 'active' : ''} onClick={() => props.setSection('photos')}>Photos</button></div>
+    {props.saveError && <div role="alert" className="error editor-save-error">{props.saveError}<button onClick={props.retry}>Retry save</button></div>}</div>
     {props.section === 'overview' ? <Overview detail={detail} editor={editor} busy={props.busy} setPublic={props.setPublic} deleteCard={props.deleteCard}/> : props.section === 'inspection' ?
       <InspectionView detail={detail} editor={editor} busy={props.busy} finalize={props.finalize} addMarker={props.addMarker} removeMarker={props.removeMarker}/> :
       <PhotosView detail={detail} editor={editor} busy={props.busy} choose={props.choosePhotos} drop={props.importDroppedPhotos} setLocked={props.setPhotoLocked} setMarkers={props.setPhotoMarkers} remove={props.removePhoto}/>}
@@ -290,40 +367,54 @@ function PhotosView({ detail, editor, busy, choose, drop, setLocked, setMarkers,
   return <div className="photos-workbench">
     <div className="photos-intro"><div><div className="eyebrow">SUPPORTING EVIDENCE</div><h3>Photos</h3><p>Originals are copied into this library. Photos are optional and never affect finalization.</p></div><span>{detail.photos.length} {detail.photos.length === 1 ? 'photo' : 'photos'}</span></div>
     <PhotoGroup title="Full Card" hint="Front and back" className="full-photo-grid" slots={fullSlots} primary={primary} busy={busy} choose={choose} drop={acceptDrop} view={setViewerId} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers}/>
-    <PhotoGroup title="Corners" hint="Physical 2 × 2 arrangement" className="corner-photo-grid" slots={cornerSlots} primary={primary} busy={busy} choose={choose} drop={acceptDrop} view={setViewerId} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers}/>
+    <PhotoGroup title="Corners" className="corner-photo-grid" slots={cornerSlots} primary={primary} busy={busy} choose={choose} drop={acceptDrop} view={setViewerId} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers}/>
     <PhotoGroup title="Edges" hint="Top, right, bottom, left" className="edge-photo-grid" slots={edgeSlots} primary={primary} busy={busy} choose={choose} drop={acceptDrop} view={setViewerId} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers}/>
     <section className="photo-group additional-group"><div className="photo-group-heading"><div><h3>Additional Photos</h3><p>Any other view. Titles are optional.</p></div><button disabled={busy} onClick={() => choose(null)}>＋ Add photos</button></div>
       <div className={additional.length ? 'additional-photo-grid' : 'additional-drop empty-additional'} onDragOver={event => event.preventDefault()} onDrop={event => acceptDrop(event, null)}>
-        {additional.length ? additional.map(photo => <PhotoTile key={photo.id} photo={photo} label={photo.title || 'Untitled photo'} busy={busy} view={setViewerId} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers} title={<input aria-label={`Title for ${photo.originalFilename}`} disabled={busy} maxLength={20000} value={photo.title ?? ''} onChange={event => editor.editPhotoTitle(photo.id, event.target.value)} placeholder="Optional title"/>}/>) : <div><strong>Drop photos here</strong><p>JPEG, PNG, or WebP · multiple files welcome</p><button disabled={busy} onClick={() => choose(null)}>Choose photos</button></div>}
+        {additional.length ? additional.map(photo => <PhotoTile key={photo.id} photo={photo} label={photo.title || photo.originalFilename} additional busy={busy} view={setViewerId} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers} saveTitle={async (id, title) => { editor.editPhotoTitle(id, title); return editor.flush() }}/>) : <div><strong>Drop photos here</strong><p>JPEG, PNG, or WebP · multiple files welcome</p><button disabled={busy} onClick={() => choose(null)}>Choose photos</button></div>}
       </div>
     </section>
-    {viewed && <PhotoViewer photo={viewed} label={viewed.slot ? photoSlots[viewed.slot] : viewed.title || 'Untitled photo'} close={() => setViewerId(null)}/>}
+    {viewed && <PhotoViewer photo={viewed} label={viewed.slot ? photoSlots[viewed.slot] : viewed.title || viewed.originalFilename} close={() => setViewerId(null)}/>}
     {removing && <div className="modal-backdrop" role="presentation"><div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="remove-photo-title"><div className="eyebrow">PERMANENT ACTION</div><h2 id="remove-photo-title">Remove this photo?</h2><p>The library copy and its thumbnail will be permanently removed. Linked defect markers will remain.</p><div className="actions"><button onClick={() => setRemoving(null)}>Keep photo</button><button className="danger solid" onClick={() => { remove(removing.id); setRemoving(null) }}>Remove permanently</button></div></div></div>}
     {replacing && <div className="modal-backdrop" role="presentation"><div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="replace-photo-title"><div className="eyebrow">REPLACE PRIMARY PHOTO</div><h2 id="replace-photo-title">Replace {photoSlots[replacing.photo.slot!]}?</h2><p>The current library copy and thumbnail will be removed only after the new image is safely copied and processed.</p><div className="actions"><button onClick={() => setReplacing(null)}>Keep current</button><button className="primary" onClick={() => { const pending = replacing; setReplacing(null); if (pending.files) drop(pending.photo.slot, pending.files); else choose(pending.photo.slot) }}>Choose replacement</button></div></div></div>}
   </div>
 }
 
 function PhotoGroup({ title, hint, className, slots, primary, busy, choose, drop, view, replace, lock, remove, markers, setMarkers }: {
-  title: string; hint: string; className: string; slots: PrimaryPhotoSlot[]; primary: (slot: PrimaryPhotoSlot) => Photo | undefined; busy: boolean
+  title: string; hint?: string; className: string; slots: PrimaryPhotoSlot[]; primary: (slot: PrimaryPhotoSlot) => Photo | undefined; busy: boolean
   choose: (slot: PrimaryPhotoSlot) => void; drop: (event: React.DragEvent, slot: PrimaryPhotoSlot, photo?: Photo) => void
   view: (id: string) => void; replace: (photo: Photo, files?: File[]) => void; lock: (id: string, locked: boolean) => void
   remove: (photo: Photo) => void; markers: DefectMarker[]; setMarkers: (id: string, markerIds: string[]) => void
 }): React.JSX.Element {
-  return <section className="photo-group"><div className="photo-group-heading"><div><h3>{title}</h3><p>{hint}</p></div></div><div className={className}>{slots.map(slot => {
+  return <section className="photo-group"><div className="photo-group-heading"><div><h3>{title}</h3>{hint && <p>{hint}</p>}</div></div><div className={className}>{slots.map(slot => {
     const photo = primary(slot)
     return photo ? <PhotoTile key={slot} photo={photo} label={photoSlots[slot]} busy={busy} view={view} replace={replace} lock={lock} remove={remove} markers={markers} setMarkers={setMarkers} onDrop={event => drop(event, slot, photo)}/> : <button key={slot} className="empty-photo-slot" aria-label={`Add ${photoSlots[slot]} photo`} disabled={busy} onClick={() => choose(slot)} onDragOver={event => event.preventDefault()} onDrop={event => drop(event, slot)}><span className="slot-plus">＋</span><strong>{photoSlots[slot]}</strong><small>Choose or drop a photo</small></button>
   })}</div></section>
 }
 
-function PhotoTile({ photo, label, title, busy, view, replace, lock, remove, markers, setMarkers, onDrop }: {
-  photo: Photo; label: string; title?: React.ReactNode; busy: boolean; view: (id: string) => void; replace: (photo: Photo, files?: File[]) => void
+function PhotoTile({ photo, label, additional = false, busy, view, replace, lock, remove, markers, setMarkers, saveTitle, onDrop }: {
+  photo: Photo; label: string; additional?: boolean; busy: boolean; view: (id: string) => void; replace: (photo: Photo, files?: File[]) => void
   lock: (id: string, locked: boolean) => void; remove: (photo: Photo) => void; markers: DefectMarker[]; setMarkers: (id: string, markerIds: string[]) => void
+  saveTitle?: (id: string, title: string) => Promise<boolean>
   onDrop?: (event: React.DragEvent) => void
 }): React.JSX.Element {
+  const [renaming, setRenaming] = useState(false)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [renameSaving, setRenameSaving] = useState(false)
+  useEffect(() => { if (!renaming) setRenameDraft(photo.title ?? '') }, [photo.title, renaming])
+
+  async function commitRename(): Promise<void> {
+    if (!saveTitle || renameSaving) return
+    setRenameSaving(true)
+    try { if (await saveTitle(photo.id, renameDraft)) setRenaming(false) }
+    finally { setRenameSaving(false) }
+  }
+
   return <article className={photo.locked ? 'photo-tile locked-photo' : 'photo-tile'} onDragOver={event => { if (onDrop) event.preventDefault() }} onDrop={onDrop}>
-    <button className="photo-image" onClick={() => view(photo.id)} aria-label={`View ${label}`}><img loading="lazy" src={photoMediaUrl(photo.id, 'thumbnail')} alt={label}/><span>{photo.locked ? '▣ Locked' : 'View'}</span></button>
-    <div className="photo-tile-body"><div className="photo-label"><strong>{label}</strong><small title={photo.originalFilename}>{photo.originalFilename}</small></div>{title}
-      <div className="photo-actions"><button aria-label={`${photo.locked ? 'Unlock' : 'Lock'} ${label}`} disabled={busy} onClick={() => lock(photo.id, !photo.locked)}>{photo.locked ? 'Unlock' : 'Lock'}</button>{photo.slot && !photo.locked && <button aria-label={`Replace ${label}`} disabled={busy} onClick={() => replace(photo)}>Replace</button>}{!photo.locked && <button aria-label={`Remove ${label}`} className="danger subtle" disabled={busy} onClick={() => remove(photo)}>Remove</button>}</div>
+    <div className="photo-image-wrap"><button className="photo-image" onClick={() => view(photo.id)} aria-label={`Open ${label} photo`}><img loading="lazy" src={photoMediaUrl(photo.id, 'thumbnail')} alt={label}/></button>{photo.locked && <span className="photo-lock-badge">▣ Locked</span>}<button className="photo-view-pill" aria-label={`View ${label}`} onClick={() => view(photo.id)}>View</button></div>
+    <div className="photo-tile-body"><div className="photo-label"><strong>{label}</strong>{(!additional || photo.title) && <small title={photo.originalFilename}>{photo.originalFilename}</small>}</div>
+      {additional && renaming && <div className="photo-rename"><label>Custom title<input autoFocus aria-label={`Rename ${photo.originalFilename}`} disabled={renameSaving} maxLength={20000} value={renameDraft} onChange={event => setRenameDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void commitRename() } else if (event.key === 'Escape') { event.preventDefault(); setRenameDraft(photo.title ?? ''); setRenaming(false) } }}/></label><div><button disabled={renameSaving} onClick={() => { setRenameDraft(photo.title ?? ''); setRenaming(false) }}>Cancel</button><button className="primary" disabled={renameSaving} onClick={() => void commitRename()}>Save</button></div></div>}
+      <div className="photo-actions">{additional && !renaming && <button aria-label={`Rename ${label}`} disabled={busy} onClick={() => { setRenameDraft(photo.title ?? ''); setRenaming(true) }}>Rename</button>}<button aria-label={`${photo.locked ? 'Unlock' : 'Lock'} ${label}`} disabled={busy} onClick={() => lock(photo.id, !photo.locked)}>{photo.locked ? 'Unlock' : 'Lock'}</button>{photo.slot && !photo.locked && <button aria-label={`Replace ${label}`} disabled={busy} onClick={() => replace(photo)}>Replace</button>}{!photo.locked && <button aria-label={`Remove ${label}`} className="danger subtle" disabled={busy} onClick={() => remove(photo)}>Remove</button>}</div>
       <PhotoMarkerLinks photo={photo} markers={markers} busy={busy} setMarkers={setMarkers}/>
     </div>
   </article>

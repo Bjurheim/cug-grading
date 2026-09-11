@@ -178,7 +178,7 @@ export class Library {
   }
   list(offset: unknown): Page {
     if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid page.')
-    const rows = this.db.prepare('SELECT cards.*,inspections.assessmentRevision,inspections.estimatedGrade FROM cards JOIN inspections ON inspections.cardId=cards.id ORDER BY updatedAt DESC,cards.id DESC LIMIT ? OFFSET ?').all(PAGE_SIZE, offset)
+    const rows = this.db.prepare('SELECT cards.*,inspections.assessmentRevision,inspections.estimatedGrade FROM cards JOIN inspections ON inspections.cardId=cards.id ORDER BY cards.serial DESC LIMIT ? OFFSET ?').all(PAGE_SIZE, offset)
     const cards = rows.map(row => ({
       ...row,
       includePublic: row.includePublic === 1,

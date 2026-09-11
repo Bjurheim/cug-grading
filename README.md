@@ -11,7 +11,7 @@ pnpm install
 pnpm dev
 ```
 
-Choose **Create a library**, select an empty local folder, name your workstation and save its serial allocation (default 1–50,000). Create a card and edit any optional metadata. Open Inspection to enter grades and centering, add optional defect markers, and finalize when all required assessment fields are complete. Open Photos to import primary or additional images, lock important images against accidental removal, and link them to markers. Use Library settings to configure future allocations or open another library.
+Choose **Create a library**, select an empty local folder, name your workstation and save its serial allocation (default 1–50,000). Card Library is the browsing workspace: cards remain in permanent serial-descending order, row selection opens a read-only preview, and **Open card** deliberately places that card in Card Grading. Card Grading keeps the active card’s Overview, Inspection and Photos workspaces available below its compact sticky identity header while you browse other cards. Use Library settings to configure future allocations or open another library.
 
 ## Validation and packaging
 

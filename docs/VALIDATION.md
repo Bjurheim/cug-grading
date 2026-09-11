@@ -1,5 +1,65 @@
 # Validation history
 
+## Milestone 5 catalogue sorting and laptop layout refinement
+
+Observed on 2026-09-11, macOS arm64. No check used a real user library; automated Electron runs created disposable libraries and media. This milestone adds no database migration.
+
+### Passed
+
+- `pnpm typecheck`: strict TypeScript passed after removing the grading close action and consolidating the compact header markup.
+- `pnpm test`: 29 tests passed. New catalogue coverage verifies descending fixed-width serial order across bounded pages, confirms editing an older card does not move it, and confirms a newly allocated higher serial enters at the correct position. All existing migration, serial, autosave, inspection and Photos tests remain green.
+- `pnpm build`: production main, preload and renderer bundles built successfully.
+- `pnpm test:desktop`: all three Electron UI tests passed. At a 1050×760 window, the suite verifies a compact header below 100 px, sticky positioning within one scroll container, two-column Corner/Edge grids, bounded 180–230 px empty preview surfaces, active identity, grading/save states, all three tabs, and removal of the legacy close control and duplicate grading breadcrumb. Existing image/View viewer, lock, replacement, removal, Rename and marker-link flows remain covered.
+- The desktop navigation test verifies the first row is serial `0000000030` and remains there after editing card `0000000005`, alongside the existing independent Library preview/Card Grading restoration checks.
+- `pnpm package`: a fresh unsigned macOS arm64 application was built under `release/mac-arm64`. The first sandboxed attempt could not reach the Electron release host; rerunning with the requested build access completed normally.
+- `pnpm test:packaged`: all three Electron UI/relaunch tests passed against the fresh packaged application.
+- `pnpm test:development`: the electron-vite development server and React renderer loaded/reloaded with trusted IPC.
+- The generated Overview and Photos screenshots were inspected at their test window sizes. The compact header retains clear identity/state hierarchy, Full Card remains generous, and the main grading content begins materially higher than before.
+- `git diff --check`: no whitespace errors.
+
+There is no separate lint command/configuration; strict TypeScript includes unused-local and unused-parameter checking. Windows and Linux remain native CI/runtime verification items and were not executed locally for this milestone.
+
+### Milestone 5 manual checks
+
+1. Populate at least fifteen cards, edit several older cards, and confirm the default Library remains strictly serial-descending through navigation and relaunch.
+2. At typical MacBook Air window sizes, review long and blank card names with In Progress, Finalized and changes-pending states. Confirm identity, grading status and save state remain legible without wrapping over the tabs.
+3. Scroll long Overview, Inspection and Photos content and confirm the two-row header stays fixed without introducing a second scrollbar or hiding focused controls.
+4. Populate all four Corner and all four Edge slots with portrait, landscape and microscope-style images. Confirm each group remains a 2×2 grid, its full photographs remain visible without cropping, and the group is practical to review in one viewport.
+5. Confirm Full Card Front/Back previews still feel intentionally larger than Corner/Edge previews and retain the `Front and back` helper text.
+6. Open every primary photo once by clicking the image and once through View, then exercise Lock/Unlock, Replace, Remove, Additional Rename and defect-marker linking to confirm layout changes did not alter behavior.
+7. Repeat the responsive and packaged-photo checks on Windows and Linux through the native validation matrix.
+
+## Milestone 4 navigation and Photos polish
+
+Observed on 2026-09-11, macOS arm64. No check used a real user library; all profiles, catalogues and images were temporary. This milestone adds no database migration.
+
+### Passed
+
+- `pnpm typecheck`: strict TypeScript passed for the separate Library preview/active grading-card state, scroll restoration, rename mode and updated tests.
+- `pnpm test`: 28 tests passed. Existing serial, migration, inspection, autosave, photo storage, lock, replacement, link, cleanup and finalization coverage remains green. Photo persistence coverage now also verifies title changes and blank-title removal leave the stored original filename and media path unchanged.
+- `pnpm build`: production main, preload and renderer bundles built successfully.
+- `pnpm test:development`: the electron-vite development server and React renderer loaded/reloaded with trusted IPC.
+- `pnpm test:desktop`: three Electron UI tests passed. The new 30-card test starts with no active grading card, selects a deeply scrolled Library row, opens it explicitly, restores its Photos tab/scroll after previewing another card, restores the other Library selection/visibility, drains a pending metadata edit across workspace navigation, and changes the active card only after the second explicit Open card action.
+- The Photos UI test verifies filename fallback without “Untitled photo,” Rename entry, Cancel, custom-title Save, original filename as secondary metadata, locked-photo rename, blank Save returning to filename fallback, image-surface viewer opening, visible View control opening, Escape/visible close, and all existing link/lock/replace/relaunch behavior.
+- `pnpm package`: an unsigned macOS arm64 application was built successfully under `release/mac-arm64`.
+- `pnpm test:packaged`: all three Electron UI/relaunch tests passed against the fresh packaged application.
+- `git diff --check`: no whitespace errors.
+- Screenshots of the full-width Overview, Photos workbench and a Library preview at a deep list position were inspected. The selected Library row stays visible, the preview remains pinned, the grading workspace uses the full main width, and the sticky grading identity/tab area does not create a second scroll region.
+
+There is no separate lint command/configuration; strict TypeScript includes unused-local and unused-parameter checking. Windows and Linux remain native CI/runtime verification items and were not executed locally for this milestone.
+
+### Milestone 4 manual checks
+
+1. Open a card on Photos, scroll to Additional Photos, visit Library and Settings, preview unrelated cards, then return through Card grading. Confirm the original card, Photos tab and approximate Photos scroll position return.
+2. Scroll several pages into a populated Library, select a row, leave and return. Confirm the same preview remains selected and its row is visible. Then select a different row and confirm the active grading card does not change until Open card is clicked.
+3. Type in Overview, grading notes, marker notes and an Additional title, then immediately use each top-level destination and each card tab. Confirm saved values survive and no workspace change bypasses the save-error protection.
+4. Review the sticky card identity/tabs while scrolling long Inspection and Photos content at typical MacBook and external-display sizes. Confirm it never obscures controls or introduces nested-scroll confusion.
+5. Verify Library previews with and without a Front photo, long names, blank metadata, all workflow states and all grade combinations.
+6. For Additional Photos, test Rename with Save, Cancel, Enter and Escape; save whitespace/blank to remove a title; and repeat while locked. Confirm the original filename/path and image remain unchanged.
+7. Open a populated photo by clicking the image surface and by clicking View. Confirm both use the same viewer and Escape still closes it.
+8. Relaunch and confirm the app intentionally starts in Card Library with Card grading showing its neutral no-active-card state until a card is explicitly opened.
+9. Repeat navigation and responsive-layout checks in packaged Windows and Linux builds through the native CI/manual matrix.
+
 ## Milestone 3 Photos
 
 Observed on 2026-09-10, macOS arm64. No check used a real user library; all profiles, catalogues and source images were temporary.

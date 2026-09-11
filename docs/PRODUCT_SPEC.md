@@ -80,15 +80,27 @@ Optional photos with at most ONE primary photograph per slot:
 - Edges: Top, Right, Bottom, Left. Spatial vs simpler grid layout is deferred.
 - Additional Photos: separate unlimited gallery; each photo may have an optional title.
 
-Photos are optional and never affect finalization. The card Photos tab provides deliberately grouped Full Card, Corners, Edges and Additional Photos areas. Native pickers and drag/drop accept JPEG, PNG and WebP. Primary slots accept one image; an occupied unlocked slot requires clear replacement confirmation. Additional import accepts multiple images and optional free-text titles; blank titles remain null. No ordering UI, required category, tag, description or photo taxonomy is introduced.
+Photos are optional and never affect finalization. The card Photos tab provides deliberately grouped Full Card, Corners, Edges and Additional Photos areas. Native pickers and drag/drop accept JPEG, PNG and WebP. Primary slots accept one image; an occupied unlocked slot requires clear replacement confirmation. Additional import accepts multiple images and optional free-text titles; blank titles remain null. No ordering UI, required category, tag, description or photo taxonomy is introduced. Full Card keeps “Front and back” helper text; Edges keeps “Top, right, bottom, left.” Corner orientation labels remain, without developer-like layout commentary.
 
 Imports copy the unchanged original into the library and generate a separate, rebuildable thumbnail. Ordinary grids lazy-load only thumbnails. Clicking a thumbnail opens the original in a large aspect-preserving viewer with visible and Escape close controls. Missing thumbnails may be rebuilt from their original. Source files outside the library are never needed after a successful import.
 
 Any photograph can optionally link to any number of defect markers belonging to the same card, and each marker can link to multiple photos. Links are supporting evidence and never change assessment revisions. Photo lock/unlock is an accidental-change safeguard only. Unlocked photos allow view/remove/replace. Locked photos allow view, title editing, marker linking and unlocking, but prevent photo removal/replacement. Locking does not create history and never prevents confirmed whole-card deletion. Removal is confirmed and permanent; successful replacement may delete the superseded original and thumbnail after the new photo is safely persisted.
 
+An Additional Photo normally displays a custom title prominently and its original filename as secondary metadata. Without a custom title, the original filename is the prominent display name; never display or persist a generic “Untitled photo” fallback. Rename is deliberate temporary editing with Save and Cancel. Its input starts with the existing custom title or blank when none exists. Enter may save and Escape may cancel. Saving blank clears the custom title. Renaming never changes the application-owned filename/path and remains available while the photo is locked. Both the image and a visible View control open the full-resolution viewer.
+
+Full Card Front/Back previews remain deliberately generous. Corner and Edge groups remain spatial 2×2 grids, but their image/empty-slot preview surfaces use bounded responsive heights so increasing window width cannot make each row excessively tall. Images fit without cropping. This targets practical laptop use while retaining every orientation label, image-click viewing and the visible View affordance.
+
+## Application workspaces and navigation
+
+The permanent sidebar contains **Card library**, **Card grading**, and **Library settings**. Card Library uses the main area for the bounded list and a read-only selected-card preview. The preview may show the front thumbnail or intentional placeholder, permanent identity, useful metadata, workflow status, and five grades. Selecting a Library row never edits or opens it. A deliberate **Open card** action makes that card the active Card Grading card and navigates there.
+
+Library preview selection and the active Card Grading card are independent. Browsing any number of Library rows must never change the grading card. Card Grading occupies the full main width and contains Overview, Inspection and Photos with persistent card identity. Its compact sticky header uses one row for serial, card name, grading status and save state, followed by one row of tabs. It does not repeat the application workspace breadcrumb or provide the legacy split-panel close action. With no active card, it shows a neutral direction to Card Library and never chooses a card automatically. New Card retains its established behavior: deliberate creation makes the new card active in Card Grading.
+
+Within a running application, preserve Library selection, page, scroll position and selected-row visibility across workspace navigation. Preserve the active grading card, active card tab, and a separate scroll position for Overview, Inspection and Photos. All workspace and tab changes drain autosave first. Full application restart intentionally returns to Card Library with no active grading card; persisted catalogue data remains unchanged, and the user must explicitly open a card again. This avoids retaining an unscoped/stale active-card pointer when libraries can change.
+
 ## Library/dashboard (foundation and future)
 
-Dense LIST is the default. Future optional Gallery/Thumbnail view. Scale to thousands or more using virtualization/lazy loading and bounded queries rather than rendering the full collection. Useful list fields: serial, card name, Game / Category, Set, estimated grade, grading status, updated date. Avoid an enormous table of all metadata.
+Dense LIST is the default, ordered by permanent 10-digit serial descending. New higher serials therefore enter at the top while editing an older card never changes its catalogue position. `updatedAt` remains available for display and a possible future Recently edited view, but does not drive the default order. Future optional Gallery/Thumbnail view. Scale to thousands or more using virtualization/lazy loading and bounded queries rather than rendering the full collection. Useful list fields: serial, card name, Game / Category, Set, estimated grade, grading status, updated date. Avoid an enormous table of all metadata.
 
 Future search covers serial, Card Name, Card Number, Game / Category, Set, Submitted by, Variant / Parallel and General Notes. Exact/near serial searches rank highly. A small Continue Working/recently edited area for In Progress cards may be useful later.
 
@@ -127,3 +139,15 @@ Photos and photo-to-marker links, public-site generation, archive/restore, synch
 Milestone 3 enables the Photos tab with fixed primary slots, unlimited Additional Photos, optional autosaved Additional titles, native picker and drag/drop import, separate generated thumbnails, lazy grid loading, and full-resolution modal viewing. It adds deliberate confirmed replacement/removal, persisted accidental-change locks, same-card many-to-many defect-marker links, and card-deletion media cleanup. Originals are copied into the selected library and are never modified during normal viewing. Photo operations do not invalidate grading finalization.
 
 Public-site generation, archive/restore, synchronization, camera/tether integration, watched folders, image editing, RAW processing, gallery ordering and all other later systems remain outside this milestone.
+
+## Milestone 4 — navigation and Photos polish boundary
+
+Milestone 4 separates Card Library browsing from full-width Card Grading. It adds a read-only Library preview and explicit Open card action, independent preview/active-card identities, persistent in-app Library selection/scroll, persistent grading card/tab/per-tab scroll, a sticky grading identity/tab header, and a no-active-card state. It also replaces permanently visible Additional title inputs with explicit Rename/Save/Cancel, filename fallback, separate image/View viewer controls, and wider responsive photo layouts. No schema migration is required.
+
+Library archive/restore, public-site generation, synchronization, Gallery view, grading statistics, New Card Using Current Metadata and other later systems remain outside this milestone.
+
+## Milestone 5 — catalogue sorting and laptop layout refinement
+
+Milestone 5 changes the default bounded Card Library query from update-recency to permanent serial descending. It compacts the Card Grading chrome into a sticky two-row identity/status/save/tab header, removes the redundant grading breadcrumb and legacy close control, and bounds Corner/Edge preview heights while retaining their 2×2 grids. Full Card previews and all established photo interactions remain unchanged. No schema migration is required.
+
+Archive/restore, public-site generation, synchronization, Gallery view, grading statistics and other later systems remain outside this milestone.
