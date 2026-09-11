@@ -2,7 +2,13 @@
   "name": "cards-under-glass",
   "version": "0.1.0",
   "description": "A local home for your card collection",
+  "desktopName": "cards-under-glass.desktop",
   "author": "Cards Under Glass",
+  "homepage": "https://github.com/Bjurheim/cug-grading",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Bjurheim/cug-grading.git"
+  },
   "license": "UNLICENSED",
   "private": true,
   "main": "out/main/index.js",
@@ -16,17 +22,26 @@
     "test": "node --import tsx --test tests/*.test.ts",
     "test:desktop": "playwright test",
     "build": "electron-vite build",
-    "package": "pnpm build && electron-builder --dir",
-    "dist": "pnpm build && electron-builder",
+    "package": "node scripts/package-platform.mjs host",
+    "package:clean": "node scripts/package-platform.mjs clean",
+    "package:mac": "node scripts/package-platform.mjs mac",
+    "package:win": "node scripts/package-platform.mjs win",
+    "package:linux": "node scripts/package-platform.mjs linux",
+    "package:all": "node scripts/package-platform.mjs all",
+    "package:validate": "node scripts/validate-packages.mjs",
+    "dist": "pnpm package",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "test:packaged": "node scripts/test-packaged.mjs",
     "test:development": "node scripts/test-development.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
+    "@electron/asar": "3.4.1",
     "@types/node": "24.13.3",
     "@types/react": "19.2.18",
     "@types/react-dom": "19.2.7",
+    "@types/yauzl": "^3.4.0",
+    "@types/yazl": "^3.3.1",
     "@vitejs/plugin-react": "5.2.0",
     "electron": "44.3.0",
     "electron-builder": "26.15.3",
@@ -38,7 +53,9 @@
   "dependencies": {
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "sharp": "0.35.4"
+    "sharp": "0.35.4",
+    "yauzl": "^3.4.0",
+    "yazl": "^3.3.1"
   },
   "build": {
     "appId": "com.cardsunderglass.desktop",
@@ -51,6 +68,12 @@
       "package.json"
     ],
     "asar": true,
+    "asarUnpack": [
+      "**/node_modules/sharp/**/*",
+      "**/node_modules/@img/**/*"
+    ],
+    "afterPack": "scripts/after-pack.cjs",
+    "artifactName": "${name}-${version}-${os}-${arch}.${ext}",
     "npmRebuild": false,
     "mac": {
       "target": [
@@ -69,7 +92,12 @@
         "AppImage",
         "deb"
       ],
-      "category": "Utility"
+      "category": "Utility",
+      "maintainer": "Cards Under Glass",
+      "syncDesktopName": true
+    },
+    "deb": {
+      "compression": "gz"
     }
   }
 }

@@ -2,9 +2,10 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
   fields, gradeFields, PAGE_SIZE, photoMediaUrl, photoSlots, serialText,
-  type Api, type Card, type CardDetail, type DefectMarker, type GradeField,
+  type Api, type ArchiveProgress, type Card, type CardDetail, type DefectMarker, type GradeField,
   type LibraryInfo, type MeasurementField, type Metadata, type Photo,
-  type NoteField, type PrimaryPhotoSlot, type Result, type Setup
+  type NoteField, type PrimaryPhotoSlot, type PublicSiteGenerated, type PublicSiteGenerationMode,
+  type PublicSiteSettings, type Result, type Setup, type SiteProgress
 } from '../shared/contracts'
 import { apparentSkew, centeringRatio, formatGrade, formatMeasurement, parseFixedInput } from '../shared/inspection'
 import { CardAutosave, type SaveState } from './autosave'
@@ -13,6 +14,7 @@ import './style.css'
 declare global { interface Window { cards: Api } }
 const unwrap = <T,>(result: Result<T>): T => { if (!result.ok) throw new Error(result.error); return result.value }
 const stateLabel = (card: Card): string => ({ in_progress: 'In Progress', finalized: 'Finalized', changes_pending: 'Finalized — changes pending' })[card.finalizationState]
+const photoLabel = (photo: Photo): string => photo.slot ? photoSlots[photo.slot] : photo.title || photo.originalFilename
 type Workspace = 'library' | 'grading' | 'settings'
 type CardSection = 'overview' | 'inspection' | 'photos'
 
@@ -28,10 +30,16 @@ function App(): React.JSX.Element {
   const [section, setSection] = useState<CardSection>('overview')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [archiveProgress, setArchiveProgress] = useState<ArchiveProgress | null>(null)
+  const [siteProgress, setSiteProgress] = useState<SiteProgress | null>(null)
+  const [siteSettings, setSiteSettings] = useState<PublicSiteSettings>({ outputFolder: null })
   const [saveState, setSaveState] = useState<SaveState>('saved')
   const [saveError, setSaveError] = useState('')
   const editor = useRef<CardAutosave | null>(null)
   const actionLock = useRef(false)
+  const archiveActive = useRef(false)
+  const siteActive = useRef(false)
   const workspaceScroll = useRef<HTMLDivElement | null>(null)
   const libraryScrollTop = useRef(0)
   const gradingScrollTop = useRef<Record<CardSection, number>>({ overview: 0, inspection: 0, photos: 0 })
@@ -46,8 +54,16 @@ function App(): React.JSX.Element {
       try { const data = unwrap(await window.cards.info()); setInfo(data); if (data) { setWorkspace(data.allocation ? 'library' : 'settings'); await refresh(0) } }
       catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)) } finally { setReady(true) }
     })()
-    return window.cards.onFlush(async () => !editor.current || await editor.current.flush())
+    const stopFlush = window.cards.onFlush(async () => !editor.current || await editor.current.flush())
+    const stopArchiveProgress = window.cards.onArchiveProgress(progress => { if (archiveActive.current) setArchiveProgress(progress) })
+    const stopSiteProgress = window.cards.onSiteProgress(progress => { if (siteActive.current) setSiteProgress(progress) })
+    return () => { stopFlush(); stopArchiveProgress(); stopSiteProgress() }
   }, [])
+
+  useEffect(() => {
+    if (!info) { setSiteSettings({ outputFolder: null }); return }
+    void window.cards.publicSiteSettings().then(unwrap).then(setSiteSettings).catch(caught => setError(caught instanceof Error ? caught.message : String(caught)))
+  }, [info?.libraryId])
 
   useLayoutEffect(() => {
     const viewport = workspaceScroll.current
@@ -159,6 +175,17 @@ function App(): React.JSX.Element {
     editor.current!.replace(unwrap(await window.cards.removePhoto(id)))
   }
 
+  async function generateSite(mode: PublicSiteGenerationMode): Promise<void> {
+    setNotice(''); siteActive.current = true
+    try {
+      const generated = unwrap(await window.cards.generatePublicSite(mode))
+      if (generated) {
+        setSiteSettings({ outputFolder: generated.outputFolder })
+        setNotice(siteSummary(generated))
+      }
+    } finally { siteActive.current = false; setSiteProgress(null) }
+  }
+
   return <div className="app">
     <aside className="sidebar">
       <div className="brand"><span className="brand-mark">▱</span><div>CARDS<br/><strong>UNDER GLASS</strong></div></div>
@@ -172,13 +199,20 @@ function App(): React.JSX.Element {
       {workspace !== 'grading' && <header><div className="breadcrumb">Workspace <span>/</span> {workspace === 'settings' ? 'Library settings' : 'Card library'}</div><span className="private-label">◈ &nbsp; Local & private</span></header>}
       <div className="workspace-scroll" ref={workspaceScroll}>
       {error && <div role="alert" className="error global-error">{error}<button onClick={() => setError('')} aria-label="Dismiss error">×</button></div>}
+      {notice && <div role="status" className="notice global-notice">{notice}<button onClick={() => setNotice('')} aria-label="Dismiss notice">×</button></div>}
       {!ready ? <div className="welcome"><h1>Opening your workspace…</h1></div> : !info ? <Welcome busy={busy} choose={create => void act(() => choose(create))}/> : workspace === 'settings' ?
-        <Settings key={info.folder + JSON.stringify(info.allocation)} info={info} busy={busy} onSubmit={setup => void act(async () => { setInfo(unwrap(await window.cards.configure(setup))); setWorkspace('library') })} onChoose={create => void act(() => choose(create))}/> : workspace === 'library' ?
+        <Settings key={info.folder + JSON.stringify(info.allocation)} info={info} busy={busy} archiveProgress={archiveProgress}
+          onSubmit={setup => void act(async () => { setInfo(unwrap(await window.cards.configure(setup))); setWorkspace('library') })} onChoose={create => void act(() => choose(create))}
+          createArchive={() => void act(async () => { setNotice(''); archiveActive.current = true; try { const created = unwrap(await window.cards.createArchive()); if (created) setNotice(`${created.filename} was created successfully.`) } finally { archiveActive.current = false; setArchiveProgress(null) } })}
+          restoreArchive={() => void act(async () => { setNotice(''); archiveActive.current = true; try { const restored = unwrap(await window.cards.restoreArchive()); if (restored) { editor.current = null; setActiveGradingCard(null); setLibrarySelectedCard(null); libraryScrollTop.current = 0; gradingScrollTop.current = { overview: 0, inspection: 0, photos: 0 }; setInfo(restored.info); setWorkspace('library'); await refresh(0); setNotice(`${restored.filename} was restored and opened. This is a replacement/recovery workflow; do not keep editing both copies.`) } } finally { archiveActive.current = false; setArchiveProgress(null) } })}
+          siteSettings={siteSettings} siteProgress={siteProgress}
+          chooseSiteFolder={() => void act(async () => { const selected = unwrap(await window.cards.choosePublicSiteFolder()); if (selected) setSiteSettings(selected) })}
+          updateSite={() => void act(() => generateSite('update'))} rebuildSite={() => void act(() => generateSite('rebuild'))}/> : workspace === 'library' ?
         <LibraryWorkspace cards={cards} total={total} offset={offset} busy={busy} canCreate={Boolean(info.allocation)} selected={librarySelectedCard}
           select={id => void act(() => previewCard(id))} open={id => void act(() => openCardForGrading(id))}
           page={page => void act(async () => { setLibrarySelectedCard(null); libraryScrollTop.current = 0; await refresh(page) })}
           create={() => void act(async () => { const detail = unwrap(await window.cards.create()); installEditor(detail); setInfo(unwrap(await window.cards.info())); await refresh(offset); setWorkspace('grading') })}/>
-        : activeGradingCard && editor.current ? <div className="grading-workspace"><CardEditor detail={activeGradingCard} section={section} busy={busy} saveState={saveState} saveError={saveError}
+        : activeGradingCard && editor.current ? <div className="grading-workspace"><CardEditor key={activeGradingCard.card.id} detail={activeGradingCard} section={section} busy={busy} saveState={saveState} saveError={saveError}
               editor={editor.current} setSection={next => void act(() => changeSection(next))}
               retry={() => void editor.current?.flush()}
               setPublic={include => void act(async () => { const card = unwrap(await window.cards.setIncludePublic(activeGradingCard.card.id, editor.current!.detail.card.revision, include)); editor.current!.replace({ ...editor.current!.detail, card }) })}
@@ -251,12 +285,37 @@ interface CardEditorProps {
 
 function CardEditor(props: CardEditorProps): React.JSX.Element {
   const { detail, editor } = props
+  const [selectedMarker, setSelectedMarker] = useState<string | null>(null)
+  const [viewerId, setViewerId] = useState<string | null>(null)
+  const [markerFocus, setMarkerFocus] = useState<{ id: string; request: number } | null>(null)
+  const [expandedPhotoLinks, setExpandedPhotoLinks] = useState<Set<string>>(() => new Set())
+  const markerFocusSequence = useRef(0)
+  const viewed = detail.photos.find(photo => photo.id === viewerId)
+  useEffect(() => {
+    if (!viewerId) return
+    const close = (event: KeyboardEvent): void => { if (event.key === 'Escape') setViewerId(null) }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [viewerId])
+  useEffect(() => {
+    const photos = new Set(detail.photos.map(photo => photo.id))
+    setExpandedPhotoLinks(current => {
+      const valid = new Set([...current].filter(id => photos.has(id)))
+      return valid.size === current.size ? current : valid
+    })
+  }, [detail.photos])
+  function focusMarker(id: string): void {
+    setSelectedMarker(id)
+    setMarkerFocus({ id, request: ++markerFocusSequence.current })
+    props.setSection('inspection')
+  }
   return <section className="editor grading-editor"><div className="editor-chrome"><div className="editor-summary"><h2><span className="serial">{detail.card.serial}</span><span className="card-identity">{detail.card.cardName || 'Unnamed Card'}</span></h2><div className="editor-state"><span className={`status ${detail.card.finalizationState}`}>{stateLabel(detail.card)}</span><span className={props.saveState === 'error' ? 'save-state save-error' : 'save-state'} role="status">{({ saved: '✓ All changes saved', saving: 'Saving…', unsaved: 'Unsaved changes…', error: 'Save failed' })[props.saveState]}</span></div></div>
     <div className="editor-tabs" aria-label="Card sections"><button className={props.section === 'overview' ? 'active' : ''} onClick={() => props.setSection('overview')}>Overview</button><button className={props.section === 'inspection' ? 'active' : ''} onClick={() => props.setSection('inspection')}>Inspection</button><button className={props.section === 'photos' ? 'active' : ''} onClick={() => props.setSection('photos')}>Photos</button></div>
     {props.saveError && <div role="alert" className="error editor-save-error">{props.saveError}<button onClick={props.retry}>Retry save</button></div>}</div>
     {props.section === 'overview' ? <Overview detail={detail} editor={editor} busy={props.busy} setPublic={props.setPublic} deleteCard={props.deleteCard}/> : props.section === 'inspection' ?
-      <InspectionView detail={detail} editor={editor} busy={props.busy} finalize={props.finalize} addMarker={props.addMarker} removeMarker={props.removeMarker}/> :
-      <PhotosView detail={detail} editor={editor} busy={props.busy} choose={props.choosePhotos} drop={props.importDroppedPhotos} setLocked={props.setPhotoLocked} setMarkers={props.setPhotoMarkers} remove={props.removePhoto}/>}
+      <InspectionView detail={detail} editor={editor} busy={props.busy} finalize={props.finalize} addMarker={props.addMarker} removeMarker={props.removeMarker} selectedMarker={selectedMarker} selectMarker={setSelectedMarker} markerFocus={markerFocus} markerFocused={request => setMarkerFocus(current => current?.request === request ? null : current)} viewPhoto={setViewerId}/> :
+      <PhotosView detail={detail} editor={editor} busy={props.busy} choose={props.choosePhotos} drop={props.importDroppedPhotos} setLocked={props.setPhotoLocked} setMarkers={props.setPhotoMarkers} remove={props.removePhoto} viewPhoto={setViewerId} focusMarker={focusMarker} expandedLinks={expandedPhotoLinks} setLinksExpanded={(id, expanded) => setExpandedPhotoLinks(current => { const next = new Set(current); if (expanded) next.add(id); else next.delete(id); return next })}/>}
+    {viewed && <PhotoViewer photo={viewed} label={photoLabel(viewed)} close={() => setViewerId(null)}/>}
   </section>
 }
 
@@ -278,16 +337,26 @@ const measurementPairs: { label: string; direction: string; first: MeasurementFi
   { label: 'Horizontal Lower', direction: 'Left / Right', first: 'horizontalLowerLeft', second: 'horizontalLowerRight', firstLabel: 'Lower Left', secondLabel: 'Lower Right' }
 ]
 
-function InspectionView({ detail, editor, busy, finalize, addMarker, removeMarker }: { detail: CardDetail; editor: CardAutosave; busy: boolean; finalize: () => void; addMarker: (side: DefectMarker['side'], x: number, y: number) => void; removeMarker: (id: string) => void }): React.JSX.Element {
+function InspectionView({ detail, editor, busy, finalize, addMarker, removeMarker, selectedMarker, selectMarker, markerFocus, markerFocused, viewPhoto }: {
+  detail: CardDetail; editor: CardAutosave; busy: boolean; finalize: () => void
+  addMarker: (side: DefectMarker['side'], x: number, y: number) => void; removeMarker: (id: string) => void
+  selectedMarker: string | null; selectMarker: (id: string | null) => void
+  markerFocus: { id: string; request: number } | null; markerFocused: (request: number) => void; viewPhoto: (id: string) => void
+}): React.JSX.Element {
   const [drafts, setDrafts] = useState<Record<string, string>>(() => ({
     ...Object.fromEntries(Object.keys(gradeFields).map(key => [key, formatGrade(detail.inspection[key as GradeField])])),
     ...Object.fromEntries(measurementPairs.flatMap(pair => [pair.first, pair.second]).map(key => [key, formatMeasurement(detail.inspection[key])]))
   }))
   const [invalid, setInvalid] = useState<Record<string, boolean>>({})
   const [inputError, setInputError] = useState('')
-  const [selectedMarker, setSelectedMarker] = useState<string | null>(null)
+  const defects = useRef<HTMLElement | null>(null)
   const hasInvalidMeasurement = measurementPairs.some(pair => invalid[pair.first] || invalid[pair.second])
   const skew = hasInvalidMeasurement ? { state: 'unavailable' as const } : apparentSkew(detail.inspection)
+  useLayoutEffect(() => {
+    if (!markerFocus || markerFocus.id !== selectedMarker) return
+    const frame = requestAnimationFrame(() => { defects.current?.scrollIntoView({ block: 'start' }); markerFocused(markerFocus.request) })
+    return () => cancelAnimationFrame(frame)
+  }, [markerFocus?.request, selectedMarker])
 
   function changeNumeric(key: GradeField | MeasurementField, value: string, decimals: 1 | 2): void {
     setDrafts(current => ({ ...current, [key]: value }))
@@ -310,9 +379,9 @@ function InspectionView({ detail, editor, busy, finalize, addMarker, removeMarke
       <div className="pair-grid">{measurementPairs.map(pair => <div className="measurement-pair" key={pair.label}><div className="pair-heading"><strong>{pair.label}</strong><small>{pair.direction}</small></div><div className="measurement-inputs">{([pair.first, pair.second] as MeasurementField[]).map((key, index) => <label key={key}>{index ? pair.secondLabel : pair.firstLabel}<span className="unit-input"><input aria-label={`${pair.label} ${index ? pair.secondLabel : pair.firstLabel}`} className={invalid[key] ? 'invalid' : ''} inputMode="decimal" value={drafts[key] ?? ''} onChange={event => changeNumeric(key, event.target.value, 2)} onBlur={() => commitNumeric(key, 2)} placeholder="—"/><span>mm</span></span></label>)}</div><div className="ratio"><span>Calculated ratio</span><strong>{invalid[pair.first] || invalid[pair.second] ? '—' : centeringRatio(detail.inspection[pair.first], detail.inspection[pair.second]) ?? '—'}</strong></div></div>)}</div>
       <div className="skew-result"><div><span>Apparent skew</span><small>Approximate, using typical card dimensions</small></div><strong>{skew.state === 'none' ? 'No apparent skew' : skew.state === 'estimated' ? `~${skew.degrees!.toFixed(1)}° ${skew.direction}` : 'Unavailable'}</strong></div>
     </section>
-    <section className="workbench-section defects"><div className="section-title"><div><div className="eyebrow">OPTIONAL EVIDENCE</div><h3>Defect map <span className="count">{detail.markers.length}</span></h3></div><span>Click a card to add</span></div>
-      <div className="defect-layout"><div className="card-maps">{(['front', 'back'] as const).map(side => <DefectMap key={side} side={side} markers={detail.markers} selected={selectedMarker} select={setSelectedMarker} add={addMarker}/>)}</div>
-        <div className="marker-panel">{selectedMarker ? <MarkerEditor marker={detail.markers.find(marker => marker.id === selectedMarker)} index={detail.markers.findIndex(marker => marker.id === selectedMarker) + 1} editor={editor} remove={() => { removeMarker(selectedMarker); setSelectedMarker(null) }}/> : <div className="marker-empty"><strong>No marker selected</strong><p>Select a numbered marker to add a note or remove it.</p></div>}</div></div>
+    <section ref={defects} className="workbench-section defects"><div className="section-title"><div><div className="eyebrow">OPTIONAL EVIDENCE</div><h3>Defect map <span className="count">{detail.markers.length}</span></h3></div><span>Click a card to add</span></div>
+      <div className="defect-layout"><div className="card-maps">{(['front', 'back'] as const).map(side => <DefectMap key={side} side={side} markers={detail.markers} selected={selectedMarker} select={selectMarker} add={addMarker}/>)}</div>
+        <div className="marker-panel">{selectedMarker ? <MarkerEditor marker={detail.markers.find(marker => marker.id === selectedMarker)} index={detail.markers.findIndex(marker => marker.id === selectedMarker) + 1} photos={detail.photos} editor={editor} viewPhoto={viewPhoto} remove={() => { removeMarker(selectedMarker); selectMarker(null) }}/> : <div className="marker-empty"><strong>No marker selected</strong><p>Select a numbered marker to add a note or remove it.</p></div>}</div></div>
     </section>
     {inputError && <div role="alert" className="error">{inputError}<button aria-label="Dismiss input error" onClick={() => setInputError('')}>×</button></div>}
     <section className="finalize-panel"><div><div className="eyebrow">WORKFLOW</div><h3>{detail.card.finalizationState === 'in_progress' ? 'Ready when you are' : detail.card.finalizationState === 'changes_pending' ? 'Review changes and finalize again' : 'Assessment finalized'}</h3><p>{detail.card.finalizedAt ? `Last finalized ${new Date(detail.card.finalizedAt).toLocaleString()}.` : 'Finalization checks only the thirteen required grading and centering values.'}</p></div><button className="primary finalize" disabled={busy} onClick={() => { if (Object.values(invalid).some(Boolean)) setInputError('Correct the highlighted numeric fields before finalizing.'); else finalize() }}>{detail.card.status === 'finalized' ? 'Finalize again' : 'Finalize assessment'}</button></section>
@@ -328,30 +397,25 @@ function DefectMap({ side, markers, selected, select, add }: { side: DefectMarke
   return <div className="map-wrap"><span>{side.toUpperCase()}</span><div className="card-map" role="group" aria-label={`${side} defect map`} onClick={event => { if ((event.target as HTMLElement).closest('.marker')) return; const rect = event.currentTarget.getBoundingClientRect(); add(side, (event.clientX - rect.left) / rect.width, (event.clientY - rect.top) / rect.height) }}>{own.map(marker => <button key={marker.id} className={selected === marker.id ? 'marker selected-marker' : 'marker'} style={{ left: `${marker.x * 100}%`, top: `${marker.y * 100}%` }} aria-label={`Marker ${markers.indexOf(marker) + 1}, ${side}`} onClick={() => select(marker.id)}>{markers.indexOf(marker) + 1}</button>)}</div></div>
 }
 
-function MarkerEditor({ marker, index, editor, remove }: { marker?: DefectMarker; index: number; editor: CardAutosave; remove: () => void }): React.JSX.Element {
+function MarkerEditor({ marker, index, photos, editor, viewPhoto, remove }: { marker?: DefectMarker; index: number; photos: Photo[]; editor: CardAutosave; viewPhoto: (id: string) => void; remove: () => void }): React.JSX.Element {
   if (!marker) return <div className="marker-empty">Marker no longer exists.</div>
-  return <div><div className="marker-title"><span className="marker-number">{index}</span><div><strong>Marker {index}</strong><small>{marker.side.toUpperCase()} · {(marker.x * 100).toFixed(1)}%, {(marker.y * 100).toFixed(1)}% · {marker.linkedPhotoCount} linked {marker.linkedPhotoCount === 1 ? 'photo' : 'photos'}</small></div></div><label>Marker note<textarea aria-label={`Marker ${index} note`} rows={5} maxLength={20000} value={marker.note ?? ''} onChange={event => editor.editMarkerNote(marker.id, event.target.value)} placeholder="Optional note…"/></label><button className="danger subtle" onClick={remove}>Remove marker</button></div>
+  const linkedPhotos = photos.filter(photo => photo.markerIds.includes(marker.id))
+  return <div><div className="marker-title"><span className="marker-number">{index}</span><div><strong>Marker {index}</strong><small>{marker.side.toUpperCase()} · {(marker.x * 100).toFixed(1)}%, {(marker.y * 100).toFixed(1)}% · {linkedPhotos.length} linked {linkedPhotos.length === 1 ? 'photo' : 'photos'}</small></div></div><label>Marker note<textarea aria-label={`Marker ${index} note`} rows={5} maxLength={20000} value={marker.note ?? ''} onChange={event => editor.editMarkerNote(marker.id, event.target.value)} placeholder="Optional note…"/></label>{linkedPhotos.length > 0 && <div className="marker-evidence"><strong>Linked photos</strong><div>{linkedPhotos.map(photo => { const label = photoLabel(photo); return <button key={photo.id} aria-label={`View linked photo ${label}`} onClick={() => viewPhoto(photo.id)}><img loading="lazy" src={photoMediaUrl(photo.id, 'thumbnail')} alt=""/><span><strong>{label}</strong>{photo.slot === null && photo.title && <small>{photo.originalFilename}</small>}{photo.locked && <small>Locked</small>}</span><span>View</span></button> })}</div></div>}<button className="danger subtle" onClick={remove}>Remove marker</button></div>
 }
 
 const fullSlots: PrimaryPhotoSlot[] = ['full_front', 'full_back']
 const cornerSlots: PrimaryPhotoSlot[] = ['corner_top_left', 'corner_top_right', 'corner_bottom_left', 'corner_bottom_right']
 const edgeSlots: PrimaryPhotoSlot[] = ['edge_top', 'edge_right', 'edge_bottom', 'edge_left']
 
-function PhotosView({ detail, editor, busy, choose, drop, setLocked, setMarkers, remove }: {
+function PhotosView({ detail, editor, busy, choose, drop, setLocked, setMarkers, remove, viewPhoto, focusMarker, expandedLinks, setLinksExpanded }: {
   detail: CardDetail; editor: CardAutosave; busy: boolean
   choose: (slot: PrimaryPhotoSlot | null) => void; drop: (slot: PrimaryPhotoSlot | null, files: File[]) => void
   setLocked: (id: string, locked: boolean) => void; setMarkers: (id: string, markerIds: string[]) => void; remove: (id: string) => void
+  viewPhoto: (id: string) => void; focusMarker: (id: string) => void
+  expandedLinks: ReadonlySet<string>; setLinksExpanded: (id: string, expanded: boolean) => void
 }): React.JSX.Element {
-  const [viewerId, setViewerId] = useState<string | null>(null)
   const [removing, setRemoving] = useState<Photo | null>(null)
   const [replacing, setReplacing] = useState<{ photo: Photo; files?: File[] } | null>(null)
-  const viewed = detail.photos.find(photo => photo.id === viewerId)
-  useEffect(() => {
-    if (!viewerId) return
-    const close = (event: KeyboardEvent): void => { if (event.key === 'Escape') setViewerId(null) }
-    window.addEventListener('keydown', close)
-    return () => window.removeEventListener('keydown', close)
-  }, [viewerId])
   const primary = (slot: PrimaryPhotoSlot): Photo | undefined => detail.photos.find(photo => photo.slot === slot)
   const additional = detail.photos.filter(photo => photo.slot === null)
   const replace = (photo: Photo, files?: File[]): void => { if (!photo.locked) setReplacing({ photo, files }) }
@@ -366,35 +430,36 @@ function PhotosView({ detail, editor, busy, choose, drop, setLocked, setMarkers,
   }
   return <div className="photos-workbench">
     <div className="photos-intro"><div><div className="eyebrow">SUPPORTING EVIDENCE</div><h3>Photos</h3><p>Originals are copied into this library. Photos are optional and never affect finalization.</p></div><span>{detail.photos.length} {detail.photos.length === 1 ? 'photo' : 'photos'}</span></div>
-    <PhotoGroup title="Full Card" hint="Front and back" className="full-photo-grid" slots={fullSlots} primary={primary} busy={busy} choose={choose} drop={acceptDrop} view={setViewerId} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers}/>
-    <PhotoGroup title="Corners" className="corner-photo-grid" slots={cornerSlots} primary={primary} busy={busy} choose={choose} drop={acceptDrop} view={setViewerId} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers}/>
-    <PhotoGroup title="Edges" hint="Top, right, bottom, left" className="edge-photo-grid" slots={edgeSlots} primary={primary} busy={busy} choose={choose} drop={acceptDrop} view={setViewerId} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers}/>
+    <PhotoGroup title="Full Card" hint="Front and back" className="full-photo-grid" slots={fullSlots} primary={primary} busy={busy} choose={choose} drop={acceptDrop} view={viewPhoto} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers} focusMarker={focusMarker} expandedLinks={expandedLinks} setLinksExpanded={setLinksExpanded}/>
+    <PhotoGroup title="Corners" className="corner-photo-grid" slots={cornerSlots} primary={primary} busy={busy} choose={choose} drop={acceptDrop} view={viewPhoto} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers} focusMarker={focusMarker} expandedLinks={expandedLinks} setLinksExpanded={setLinksExpanded}/>
+    <PhotoGroup title="Edges" hint="Top, right, bottom, left" className="edge-photo-grid" slots={edgeSlots} primary={primary} busy={busy} choose={choose} drop={acceptDrop} view={viewPhoto} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers} focusMarker={focusMarker} expandedLinks={expandedLinks} setLinksExpanded={setLinksExpanded}/>
     <section className="photo-group additional-group"><div className="photo-group-heading"><div><h3>Additional Photos</h3><p>Any other view. Titles are optional.</p></div><button disabled={busy} onClick={() => choose(null)}>＋ Add photos</button></div>
       <div className={additional.length ? 'additional-photo-grid' : 'additional-drop empty-additional'} onDragOver={event => event.preventDefault()} onDrop={event => acceptDrop(event, null)}>
-        {additional.length ? additional.map(photo => <PhotoTile key={photo.id} photo={photo} label={photo.title || photo.originalFilename} additional busy={busy} view={setViewerId} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers} saveTitle={async (id, title) => { editor.editPhotoTitle(id, title); return editor.flush() }}/>) : <div><strong>Drop photos here</strong><p>JPEG, PNG, or WebP · multiple files welcome</p><button disabled={busy} onClick={() => choose(null)}>Choose photos</button></div>}
+        {additional.length ? additional.map(photo => <PhotoTile key={photo.id} photo={photo} label={photo.title || photo.originalFilename} additional busy={busy} view={viewPhoto} replace={replace} lock={setLocked} remove={setRemoving} markers={detail.markers} setMarkers={setMarkers} focusMarker={focusMarker} linksExpanded={expandedLinks.has(photo.id)} setLinksExpanded={setLinksExpanded} saveTitle={async (id, title) => { editor.editPhotoTitle(id, title); return editor.flush() }}/>) : <div><strong>Drop photos here</strong><p>JPEG, PNG, or WebP · multiple files welcome</p><button disabled={busy} onClick={() => choose(null)}>Choose photos</button></div>}
       </div>
     </section>
-    {viewed && <PhotoViewer photo={viewed} label={viewed.slot ? photoSlots[viewed.slot] : viewed.title || viewed.originalFilename} close={() => setViewerId(null)}/>}
     {removing && <div className="modal-backdrop" role="presentation"><div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="remove-photo-title"><div className="eyebrow">PERMANENT ACTION</div><h2 id="remove-photo-title">Remove this photo?</h2><p>The library copy and its thumbnail will be permanently removed. Linked defect markers will remain.</p><div className="actions"><button onClick={() => setRemoving(null)}>Keep photo</button><button className="danger solid" onClick={() => { remove(removing.id); setRemoving(null) }}>Remove permanently</button></div></div></div>}
     {replacing && <div className="modal-backdrop" role="presentation"><div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="replace-photo-title"><div className="eyebrow">REPLACE PRIMARY PHOTO</div><h2 id="replace-photo-title">Replace {photoSlots[replacing.photo.slot!]}?</h2><p>The current library copy and thumbnail will be removed only after the new image is safely copied and processed.</p><div className="actions"><button onClick={() => setReplacing(null)}>Keep current</button><button className="primary" onClick={() => { const pending = replacing; setReplacing(null); if (pending.files) drop(pending.photo.slot, pending.files); else choose(pending.photo.slot) }}>Choose replacement</button></div></div></div>}
   </div>
 }
 
-function PhotoGroup({ title, hint, className, slots, primary, busy, choose, drop, view, replace, lock, remove, markers, setMarkers }: {
+function PhotoGroup({ title, hint, className, slots, primary, busy, choose, drop, view, replace, lock, remove, markers, setMarkers, focusMarker, expandedLinks, setLinksExpanded }: {
   title: string; hint?: string; className: string; slots: PrimaryPhotoSlot[]; primary: (slot: PrimaryPhotoSlot) => Photo | undefined; busy: boolean
   choose: (slot: PrimaryPhotoSlot) => void; drop: (event: React.DragEvent, slot: PrimaryPhotoSlot, photo?: Photo) => void
   view: (id: string) => void; replace: (photo: Photo, files?: File[]) => void; lock: (id: string, locked: boolean) => void
-  remove: (photo: Photo) => void; markers: DefectMarker[]; setMarkers: (id: string, markerIds: string[]) => void
+  remove: (photo: Photo) => void; markers: DefectMarker[]; setMarkers: (id: string, markerIds: string[]) => void; focusMarker: (id: string) => void
+  expandedLinks: ReadonlySet<string>; setLinksExpanded: (id: string, expanded: boolean) => void
 }): React.JSX.Element {
   return <section className="photo-group"><div className="photo-group-heading"><div><h3>{title}</h3>{hint && <p>{hint}</p>}</div></div><div className={className}>{slots.map(slot => {
     const photo = primary(slot)
-    return photo ? <PhotoTile key={slot} photo={photo} label={photoSlots[slot]} busy={busy} view={view} replace={replace} lock={lock} remove={remove} markers={markers} setMarkers={setMarkers} onDrop={event => drop(event, slot, photo)}/> : <button key={slot} className="empty-photo-slot" aria-label={`Add ${photoSlots[slot]} photo`} disabled={busy} onClick={() => choose(slot)} onDragOver={event => event.preventDefault()} onDrop={event => drop(event, slot)}><span className="slot-plus">＋</span><strong>{photoSlots[slot]}</strong><small>Choose or drop a photo</small></button>
+    return photo ? <PhotoTile key={slot} photo={photo} label={photoSlots[slot]} busy={busy} view={view} replace={replace} lock={lock} remove={remove} markers={markers} setMarkers={setMarkers} focusMarker={focusMarker} linksExpanded={expandedLinks.has(photo.id)} setLinksExpanded={setLinksExpanded} onDrop={event => drop(event, slot, photo)}/> : <button key={slot} className="empty-photo-slot" aria-label={`Add ${photoSlots[slot]} photo`} disabled={busy} onClick={() => choose(slot)} onDragOver={event => event.preventDefault()} onDrop={event => drop(event, slot)}><span className="slot-plus">＋</span><strong>{photoSlots[slot]}</strong><small>Choose or drop a photo</small></button>
   })}</div></section>
 }
 
-function PhotoTile({ photo, label, additional = false, busy, view, replace, lock, remove, markers, setMarkers, saveTitle, onDrop }: {
+function PhotoTile({ photo, label, additional = false, busy, view, replace, lock, remove, markers, setMarkers, focusMarker, linksExpanded, setLinksExpanded, saveTitle, onDrop }: {
   photo: Photo; label: string; additional?: boolean; busy: boolean; view: (id: string) => void; replace: (photo: Photo, files?: File[]) => void
-  lock: (id: string, locked: boolean) => void; remove: (photo: Photo) => void; markers: DefectMarker[]; setMarkers: (id: string, markerIds: string[]) => void
+  lock: (id: string, locked: boolean) => void; remove: (photo: Photo) => void; markers: DefectMarker[]; setMarkers: (id: string, markerIds: string[]) => void; focusMarker: (id: string) => void
+  linksExpanded: boolean; setLinksExpanded: (id: string, expanded: boolean) => void
   saveTitle?: (id: string, title: string) => Promise<boolean>
   onDrop?: (event: React.DragEvent) => void
 }): React.JSX.Element {
@@ -415,25 +480,56 @@ function PhotoTile({ photo, label, additional = false, busy, view, replace, lock
     <div className="photo-tile-body"><div className="photo-label"><strong>{label}</strong>{(!additional || photo.title) && <small title={photo.originalFilename}>{photo.originalFilename}</small>}</div>
       {additional && renaming && <div className="photo-rename"><label>Custom title<input autoFocus aria-label={`Rename ${photo.originalFilename}`} disabled={renameSaving} maxLength={20000} value={renameDraft} onChange={event => setRenameDraft(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void commitRename() } else if (event.key === 'Escape') { event.preventDefault(); setRenameDraft(photo.title ?? ''); setRenaming(false) } }}/></label><div><button disabled={renameSaving} onClick={() => { setRenameDraft(photo.title ?? ''); setRenaming(false) }}>Cancel</button><button className="primary" disabled={renameSaving} onClick={() => void commitRename()}>Save</button></div></div>}
       <div className="photo-actions">{additional && !renaming && <button aria-label={`Rename ${label}`} disabled={busy} onClick={() => { setRenameDraft(photo.title ?? ''); setRenaming(true) }}>Rename</button>}<button aria-label={`${photo.locked ? 'Unlock' : 'Lock'} ${label}`} disabled={busy} onClick={() => lock(photo.id, !photo.locked)}>{photo.locked ? 'Unlock' : 'Lock'}</button>{photo.slot && !photo.locked && <button aria-label={`Replace ${label}`} disabled={busy} onClick={() => replace(photo)}>Replace</button>}{!photo.locked && <button aria-label={`Remove ${label}`} className="danger subtle" disabled={busy} onClick={() => remove(photo)}>Remove</button>}</div>
-      <PhotoMarkerLinks photo={photo} markers={markers} busy={busy} setMarkers={setMarkers}/>
+      <PhotoMarkerLinks photo={photo} markers={markers} busy={busy} setMarkers={setMarkers} focusMarker={focusMarker} expanded={linksExpanded} setExpanded={setLinksExpanded}/>
     </div>
   </article>
 }
 
-function PhotoMarkerLinks({ photo, markers, busy, setMarkers }: { photo: Photo; markers: DefectMarker[]; busy: boolean; setMarkers: (id: string, markerIds: string[]) => void }): React.JSX.Element {
-  return <details className="photo-marker-links"><summary>{photo.markerIds.length ? `${photo.markerIds.length} linked ${photo.markerIds.length === 1 ? 'marker' : 'markers'}` : 'Link defect markers'}</summary><div>{markers.length ? markers.map((marker, index) => <label key={marker.id}><input type="checkbox" disabled={busy} checked={photo.markerIds.includes(marker.id)} onChange={event => setMarkers(photo.id, event.target.checked ? [...photo.markerIds, marker.id] : photo.markerIds.filter(id => id !== marker.id))}/><span><strong>Marker {index + 1} — {marker.side.toUpperCase()}</strong>{marker.note && <small>{marker.note.slice(0, 80)}</small>}</span></label>) : <p>No defect markers on this card.</p>}</div></details>
+function PhotoMarkerLinks({ photo, markers, busy, setMarkers, focusMarker, expanded, setExpanded }: { photo: Photo; markers: DefectMarker[]; busy: boolean; setMarkers: (id: string, markerIds: string[]) => void; focusMarker: (id: string) => void; expanded: boolean; setExpanded: (id: string, expanded: boolean) => void }): React.JSX.Element {
+  return <details className="photo-marker-links" open={expanded}><summary aria-expanded={expanded} onClick={event => { event.preventDefault(); setExpanded(photo.id, !expanded) }}>{photo.markerIds.length ? `${photo.markerIds.length} linked ${photo.markerIds.length === 1 ? 'marker' : 'markers'}` : 'Link defect markers'}</summary><div>{markers.length ? markers.map((marker, index) => { const markerLabel = `Marker ${index + 1} — ${marker.side.toUpperCase()}`; return <div className="photo-marker-row" key={marker.id}><input aria-label={`Link ${markerLabel} to ${photoLabel(photo)}`} type="checkbox" disabled={busy} checked={photo.markerIds.includes(marker.id)} onChange={event => setMarkers(photo.id, event.target.checked ? [...photo.markerIds, marker.id] : photo.markerIds.filter(id => id !== marker.id))}/><button aria-label={`Go to ${markerLabel}`} disabled={busy} onClick={() => focusMarker(marker.id)}><span><strong>{markerLabel}</strong>{marker.note && <small>{marker.note.slice(0, 80)}</small>}</span><span>Inspect</span></button></div> }) : <p>No defect markers on this card.</p>}</div></details>
 }
 
 function PhotoViewer({ photo, label, close }: { photo: Photo; label: string; close: () => void }): React.JSX.Element {
   return <div className="photo-viewer-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) close() }}><div className="photo-viewer" role="dialog" aria-modal="true" aria-label={`Viewing ${label}`}><div className="viewer-heading"><div><strong>{label}</strong><small>{photo.originalFilename}</small></div><button aria-label="Close photo viewer" onClick={close}>×</button></div><div className="viewer-canvas"><img src={photoMediaUrl(photo.id, 'original')} alt={label}/></div></div></div>
 }
 
-function Settings({ info, busy, onSubmit, onChoose }: { info: LibraryInfo; busy: boolean; onSubmit: (setup: Setup) => void; onChoose: (create: boolean) => void }): React.JSX.Element {
+function archiveStageLabel(progress: ArchiveProgress): string {
+  const labels: Record<ArchiveProgress['stage'], string> = {
+    preparing: 'Preparing library…', validating: 'Validating archive…',
+    database: progress.operation === 'create' ? 'Archiving database…' : 'Restoring database…',
+    photos: progress.operation === 'create' ? 'Archiving photos…' : 'Restoring photos…',
+    extracting: 'Extracting library…', finalizing: 'Finalizing archive…', complete: 'Finishing…'
+  }
+  return labels[progress.stage]
+}
+
+function siteStageLabel(progress: SiteProgress): string {
+  const labels: Record<SiteProgress['stage'], string> = {
+    preparing: 'Preparing public site…', checking: 'Checking reports…', photos: 'Processing changed photos…',
+    generating: progress.mode === 'rebuild' ? 'Rebuilding reports…' : 'Generating changed reports…',
+    search: 'Updating catalogue…', writing: 'Writing site…', complete: 'Finishing…'
+  }
+  return labels[progress.stage]
+}
+
+function siteSummary(result: PublicSiteGenerated): string {
+  if (result.mode === 'rebuild') return `Public site rebuilt: ${result.rebuiltReports} ${result.rebuiltReports === 1 ? 'report' : 'reports'} rebuilt${result.removedReports ? `, ${result.removedReports} removed` : ''}.`
+  return `Public site updated: ${result.newReports} new, ${result.updatedReports} updated, ${result.removedReports} removed, ${result.unchangedReports} unchanged.`
+}
+
+function Settings({ info, busy, archiveProgress, siteProgress, siteSettings, onSubmit, onChoose, createArchive, restoreArchive, chooseSiteFolder, updateSite, rebuildSite }: { info: LibraryInfo; busy: boolean; archiveProgress: ArchiveProgress | null; siteProgress: SiteProgress | null; siteSettings: PublicSiteSettings; onSubmit: (setup: Setup) => void; onChoose: (create: boolean) => void; createArchive: () => void; restoreArchive: () => void; chooseSiteFolder: () => void; updateSite: () => void; rebuildSite: () => void }): React.JSX.Element {
   const [name, setName] = useState(info.installationName || 'My workstation')
   const [start, setStart] = useState(serialText(info.allocation?.start ?? 1))
   const [end, setEnd] = useState(serialText(info.allocation?.end ?? 50000))
   const [next, setNext] = useState(serialText(info.allocation?.next ?? 1))
-  return <div className="settings"><div className="eyebrow">MAKE YOURSELF AT HOME</div><h1>{info.allocation ? 'Library settings' : 'Set up your workstation'}</h1><p>Give this installation a name and its own range of permanent serials.</p><form onSubmit={event => { event.preventDefault(); onSubmit({ name, start: Number(start), end: Number(end), next: Number(next) }) }}><fieldset disabled={busy}><label>Workstation name<input required maxLength={200} value={name} onChange={event => setName(event.target.value)}/></label><div className="settings-range"><label>First serial<input required inputMode="numeric" pattern="[0-9]{1,10}" value={start} onChange={event => setStart(event.target.value)}/></label><label>Last serial<input required inputMode="numeric" pattern="[0-9]{1,10}" value={end} onChange={event => setEnd(event.target.value)}/></label><label>Next serial<input required inputMode="numeric" pattern="[0-9]{1,10}" value={next} onChange={event => setNext(event.target.value)}/></label></div><div className="notice">The usual range is 50,000 serials per installation. Previously assigned serials stay reserved forever, including after card deletion.</div><button className="primary" type="submit">Save allocation</button></fieldset></form>{info.history.length > 0 && <section className="range-history"><h2>Allocation history</h2>{info.history.map(allocation => <div key={allocation.id}><span className="serial">{serialText(allocation.start)} – {serialText(allocation.end)}</span><span>{allocation.retiredAt ? 'Retired' : allocation.next > allocation.end ? 'Exhausted' : 'Current'}</span></div>)}</section>}<section className="library-location"><h2>Library folder</h2><p>{info.folder}</p><div className="actions"><button disabled={busy} onClick={() => onChoose(false)}>Open another library</button><button disabled={busy} onClick={() => onChoose(true)}>Create another library</button></div></section></div>
+  const [confirmRebuild, setConfirmRebuild] = useState(false)
+  const progress = archiveProgress ? `${archiveStageLabel(archiveProgress)}${archiveProgress.total !== undefined && archiveProgress.completed !== undefined ? ` ${archiveProgress.completed} / ${archiveProgress.total}` : ''}` : null
+  const publicProgress = siteProgress ? `${siteStageLabel(siteProgress)}${siteProgress.total !== undefined && siteProgress.completed !== undefined ? ` ${siteProgress.completed} / ${siteProgress.total}` : ''}` : null
+  return <><div className="settings"><div className="eyebrow">MAKE YOURSELF AT HOME</div><h1>{info.allocation ? 'Library settings' : 'Set up your workstation'}</h1><p>Give this installation a name and its own range of permanent serials.</p><form onSubmit={event => { event.preventDefault(); onSubmit({ name, start: Number(start), end: Number(end), next: Number(next) }) }}><fieldset disabled={busy}><label>Workstation name<input required maxLength={200} value={name} onChange={event => setName(event.target.value)}/></label><div className="settings-range"><label>First serial<input required inputMode="numeric" pattern="[0-9]{1,10}" value={start} onChange={event => setStart(event.target.value)}/></label><label>Last serial<input required inputMode="numeric" pattern="[0-9]{1,10}" value={end} onChange={event => setEnd(event.target.value)}/></label><label>Next serial<input required inputMode="numeric" pattern="[0-9]{1,10}" value={next} onChange={event => setNext(event.target.value)}/></label></div><div className="notice">The usual range is 50,000 serials per installation. Previously assigned serials stay reserved forever, including after card deletion.</div><button className="primary" type="submit">Save allocation</button></fieldset></form>{info.history.length > 0 && <section className="range-history"><h2>Allocation history</h2>{info.history.map(allocation => <div key={allocation.id}><span className="serial">{serialText(allocation.start)} – {serialText(allocation.end)}</span><span>{allocation.retiredAt ? 'Retired' : allocation.next > allocation.end ? 'Exhausted' : 'Current'}</span></div>)}</section>}
+    <section className="archive-settings"><div><div className="eyebrow">MANUAL BACKUP & RECOVERY</div><h2>Library archive</h2><p>A <strong>.cug</strong> file is a standard ZIP containing a consistent catalogue snapshot and every original photo. Thumbnail caches are rebuilt and are not included.</p></div><div className="archive-actions"><article><h3>Create Library Archive</h3><p>Create one complete private backup of this library. Save it anywhere; backups are manual.</p><button disabled={busy} onClick={createArchive}>Create Library Archive…</button></article><article><h3>Restore Library Archive</h3><p>Restore a complete backup into a separate new or empty folder. Nothing is merged into this library.</p><button disabled={busy} onClick={restoreArchive}>Restore Library Archive…</button></article></div>{progress && <div className="archive-progress" role="status"><span className="progress-dot"/>{progress}</div>}<p className="archive-warning">Restore is for replacement or recovery. Do not edit the old and restored copies concurrently because they intentionally share installation identity and serial allocation history.</p></section>
+    <section className="site-settings"><div><div className="eyebrow">STATIC CARD REPORTS</div><h2>Public site</h2><p>Generate a static catalogue from finalized, current assessments that have <strong>Include on public site</strong> enabled. Submitted by, General Notes, and unlinked Additional Photos are never included.</p></div><div className="site-output"><span>Output folder</span><strong title={siteSettings.outputFolder ?? undefined}>{siteSettings.outputFolder ?? 'Choose a folder before generating'}</strong></div><div className="site-generation-actions"><div><button className="primary" disabled={busy} onClick={updateSite}>Update Public Site</button><p>Generates new and changed reports and removes outdated reports.</p></div><div><button disabled={busy} onClick={() => setConfirmRebuild(true)}>Rebuild Entire Site…</button><p>Recreates every public report and generated image.</p></div><button disabled={busy} onClick={chooseSiteFolder}>{siteSettings.outputFolder ? 'Change output folder…' : 'Choose output folder…'}</button></div>{publicProgress && <div className="archive-progress" role="status"><span className="progress-dot"/>{publicProgress}</div>}<p className="archive-warning">Generation updates only files owned by Cards Under Glass. Files such as <strong>.git</strong>, <strong>CNAME</strong>, and other user-managed content are preserved. No Git or hosting operation is performed.</p></section>
+    <section className="library-location"><h2>Library folder</h2><p>{info.folder}</p><div className="actions"><button disabled={busy} onClick={() => onChoose(false)}>Open another library</button><button disabled={busy} onClick={() => onChoose(true)}>Create another library</button></div></section></div>
+    {confirmRebuild && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setConfirmRebuild(false) }}><div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="rebuild-site-title"><div className="eyebrow">FULL PUBLIC-SITE REBUILD</div><h2 id="rebuild-site-title">Rebuild the entire public site?</h2><p>Every eligible report and generated image will be recreated. This may take longer for a large catalogue. User-managed files in the output folder remain untouched.</p><div className="actions"><button onClick={() => setConfirmRebuild(false)}>Cancel</button><button className="primary" onClick={() => { setConfirmRebuild(false); rebuildSite() }}>Rebuild entire site</button></div></div></div>}</>
 }
 
 createRoot(document.getElementById('root')!).render(<App/>)

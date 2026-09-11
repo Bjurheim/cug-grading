@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { Library, validateSetup } from '../src/main/library'
 import { fields, type Metadata } from '../src/shared/contracts'
-import { migrate } from '../src/main/migrations'
+import { migrate, migrations } from '../src/main/migrations'
 const blank = (): Metadata => Object.fromEntries(Object.keys(fields).map(k => [k, null])) as Metadata
 function fixture(t: TestContext): { folder: string; lib: Library } {
   const folder = mkdtempSync(join(tmpdir(), 'cug-test-'))
@@ -76,8 +76,8 @@ test('migrations are idempotent, transactional, and reject future versions', () 
   const db = new DatabaseSync(':memory:')
   try {
     migrate(db); migrate(db)
-    assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()!.n, 4)
-    db.exec("INSERT INTO schema_migrations VALUES (5,'future')")
+    assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()!.n, 5)
+    db.exec("INSERT INTO schema_migrations VALUES (6,'future')")
     assert.throws(() => migrate(db), /unsupported schema/)
   } finally { db.close() }
   const broken = new DatabaseSync(':memory:')
@@ -87,6 +87,30 @@ test('migrations are idempotent, transactional, and reject future versions', () 
     assert.equal(broken.prepare("SELECT name FROM sqlite_master WHERE name='installations'").get(), undefined)
     assert.equal(broken.prepare('SELECT count(*) AS n FROM schema_migrations').get()!.n, 0)
   } finally { broken.close() }
+})
+test('migration 5 assigns one stable immutable library identity', t => {
+  const folder = mkdtempSync(join(tmpdir(), 'cug-library-identity-'))
+  t.after(() => rmSync(folder, { recursive: true, force: true }))
+  const database = new DatabaseSync(join(folder, 'catalogue.sqlite')), now = new Date().toISOString()
+  database.exec('PRAGMA foreign_keys=ON; CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, appliedAt TEXT NOT NULL)')
+  for (let index = 0; index < 4; index++) {
+    database.exec(migrations[index])
+    database.prepare('INSERT INTO schema_migrations VALUES (?,?)').run(index + 1, now)
+  }
+  database.close()
+  const migrated = new Library(folder, 'installation-a')
+  const libraryId = migrated.info().libraryId
+  assert.match(libraryId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  migrated.close()
+  const reopened = new Library(folder, 'installation-a')
+  try {
+    assert.equal(reopened.info().libraryId, libraryId)
+    const check = new DatabaseSync(join(folder, 'catalogue.sqlite'))
+    try {
+      assert.throws(() => check.prepare('UPDATE library_metadata SET libraryId=? WHERE singleton=1').run('00000000-0000-4000-8000-000000000000'), /permanent/)
+      assert.throws(() => check.prepare('DELETE FROM library_metadata WHERE singleton=1').run(), /permanent/)
+    } finally { check.close() }
+  } finally { reopened.close() }
 })
 test('installations require their own allocation and cannot overlap other recorded ranges', t => {
   const { lib, folder } = fixture(t); lib.create()

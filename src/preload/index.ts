@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { Api } from '../shared/contracts'
+import type { Api, ArchiveProgress, SiteProgress } from '../shared/contracts'
 const api: Api = {
   info: () => ipcRenderer.invoke('library:info'),
   chooseLibrary: create => ipcRenderer.invoke('library:choose', create),
@@ -21,6 +21,21 @@ const api: Api = {
   removePhoto: id => ipcRenderer.invoke('photos:remove', id),
   finalize: (id, revision) => ipcRenderer.invoke('cards:finalize', id, revision),
   delete: id => ipcRenderer.invoke('cards:delete', id),
+  createArchive: () => ipcRenderer.invoke('archive:create'),
+  restoreArchive: () => ipcRenderer.invoke('archive:restore'),
+  onArchiveProgress: callback => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: ArchiveProgress): void => callback(progress)
+    ipcRenderer.on('archive:progress', handler)
+    return () => ipcRenderer.removeListener('archive:progress', handler)
+  },
+  publicSiteSettings: () => ipcRenderer.invoke('site:settings'),
+  choosePublicSiteFolder: () => ipcRenderer.invoke('site:choose-output'),
+  generatePublicSite: mode => ipcRenderer.invoke('site:generate', mode),
+  onSiteProgress: callback => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: SiteProgress): void => callback(progress)
+    ipcRenderer.on('site:progress', handler)
+    return () => ipcRenderer.removeListener('site:progress', handler)
+  },
   onFlush: callback => {
     const handler = async () => {
       let ok = false

@@ -52,10 +52,35 @@ export interface CardDetail { card: Card; inspection: Inspection; markers: Defec
 export interface InspectionSave { card: Card; inspection: Inspection }
 export interface Allocation { id: string; start: number; end: number; next: number; retiredAt: string | null }
 export interface LibraryInfo {
-  folder: string; installationName: string; allocation: Allocation | null; history: Allocation[]
+  folder: string; libraryId: string; installationName: string; allocation: Allocation | null; history: Allocation[]
 }
 export interface Setup { name: string; start: number; end: number; next: number }
 export interface Page { cards: Card[]; total: number }
+export interface ArchiveProgress {
+  operation: 'create' | 'restore'
+  stage: 'preparing' | 'validating' | 'database' | 'photos' | 'extracting' | 'finalizing' | 'complete'
+  completed?: number
+  total?: number
+}
+export interface ArchiveCreated { filename: string }
+export interface ArchiveRestored { filename: string; info: LibraryInfo }
+export interface SiteProgress {
+  stage: 'preparing' | 'checking' | 'photos' | 'generating' | 'search' | 'writing' | 'complete'
+  mode: PublicSiteGenerationMode
+  completed?: number
+  total?: number
+  summary?: PublicSiteGenerationSummary
+}
+export type PublicSiteGenerationMode = 'update' | 'rebuild'
+export interface PublicSiteGenerationSummary {
+  newReports: number
+  updatedReports: number
+  removedReports: number
+  unchangedReports: number
+  rebuiltReports: number
+}
+export interface PublicSiteSettings { outputFolder: string | null }
+export interface PublicSiteGenerated extends PublicSiteGenerationSummary { outputFolder: string; reportCount: number; mode: PublicSiteGenerationMode }
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 export interface Api {
   info(): Promise<Result<LibraryInfo | null>>
@@ -78,6 +103,13 @@ export interface Api {
   removePhoto(id: string): Promise<Result<CardDetail>>
   finalize(id: string, revision: number): Promise<Result<CardDetail>>
   delete(id: string): Promise<Result<null>>
+  createArchive(): Promise<Result<ArchiveCreated | null>>
+  restoreArchive(): Promise<Result<ArchiveRestored | null>>
+  onArchiveProgress(callback: (progress: ArchiveProgress) => void): () => void
+  publicSiteSettings(): Promise<Result<PublicSiteSettings>>
+  choosePublicSiteFolder(): Promise<Result<PublicSiteSettings | null>>
+  generatePublicSite(mode: PublicSiteGenerationMode): Promise<Result<PublicSiteGenerated | null>>
+  onSiteProgress(callback: (progress: SiteProgress) => void): () => void
   onFlush(callback: () => Promise<boolean>): () => void
 }
 export const photoMediaUrl = (id: string, variant: 'thumbnail' | 'original'): string => `cug-media://${variant}/${encodeURIComponent(id)}`

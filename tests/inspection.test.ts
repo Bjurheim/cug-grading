@@ -159,7 +159,7 @@ test('migration upgrades a milestone-1 database and reserves its existing serial
     assert.equal(detail.card.finalizationState, 'in_progress')
     assert.equal(lib.create().card.serial, '0000000002')
     const migrated = new DatabaseSync(join(folder, 'catalogue.sqlite'))
-    try { assert.equal(migrated.prepare('SELECT count(*) AS total FROM schema_migrations').get()!.total, 4); assert.equal(migrated.prepare('SELECT count(*) AS total FROM serial_reservations').get()!.total, 2) } finally { migrated.close() }
+    try { assert.equal(migrated.prepare('SELECT count(*) AS total FROM schema_migrations').get()!.total, 5); assert.equal(migrated.prepare('SELECT count(*) AS total FROM serial_reservations').get()!.total, 2) } finally { migrated.close() }
   } finally { lib.close() }
 })
 

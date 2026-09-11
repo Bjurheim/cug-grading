@@ -139,7 +139,23 @@ export const migrations = [
      FOREIGN KEY(photoId,cardId) REFERENCES photos(id,cardId) ON DELETE CASCADE,
      FOREIGN KEY(markerId,cardId) REFERENCES defect_markers(id,cardId) ON DELETE CASCADE
    );
-   CREATE INDEX photo_defect_markers_marker ON photo_defect_markers(markerId,photoId);`
+   CREATE INDEX photo_defect_markers_marker ON photo_defect_markers(markerId,photoId);`,
+  `CREATE TABLE library_metadata (
+     singleton INTEGER PRIMARY KEY NOT NULL CHECK(singleton=1),
+     libraryId TEXT NOT NULL UNIQUE CHECK(length(libraryId)=36),
+     createdAt TEXT NOT NULL
+   );
+   INSERT INTO library_metadata(singleton,libraryId,createdAt) VALUES (
+     1,
+     lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' ||
+       substr(lower(hex(randomblob(2))),2) || '-' || substr('89ab',(random() & 3)+1,1) ||
+       substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6))),
+     strftime('%Y-%m-%dT%H:%M:%fZ','now')
+   );
+   CREATE TRIGGER no_library_identity_update BEFORE UPDATE OF libraryId ON library_metadata
+     BEGIN SELECT RAISE(ABORT, 'Library identity is permanent'); END;
+   CREATE TRIGGER no_library_metadata_delete BEFORE DELETE ON library_metadata
+     BEGIN SELECT RAISE(ABORT, 'Library identity is permanent'); END;`
 ]
 export function migrate(db: DatabaseSync): void {
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, appliedAt TEXT NOT NULL)')

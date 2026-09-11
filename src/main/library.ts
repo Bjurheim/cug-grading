@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite'
+import { backup, DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { constants, copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
@@ -10,6 +10,7 @@ import {
   type Metadata, type NoteField, type Page, type Photo, type PrimaryPhotoSlot, type Setup
 } from '../shared/contracts'
 import { missingFinalizationFields } from '../shared/inspection'
+import type { PublicCardSource, PublicInspectionSource, PublicMarkerSource, PublicPhotoSource } from './public-model'
 export const MAX_SERIAL = 9_999_999_999
 export function validateSetup(value: unknown): asserts value is Setup {
   if (!value || typeof value !== 'object') throw new Error('Invalid allocation settings.')
@@ -124,9 +125,11 @@ export class Library {
     return marker as unknown as DefectMarker
   }
   info(): LibraryInfo {
+    const metadata = this.db.prepare('SELECT libraryId FROM library_metadata WHERE singleton=1').get()
+    if (!metadata) throw new Error('Library identity is missing.')
     const installation = this.db.prepare('SELECT name FROM installations WHERE id=?').get(this.installationId)
     const history = this.db.prepare('SELECT id,start,end,next,retiredAt FROM allocations WHERE installationId=? ORDER BY rowid DESC').all(this.installationId) as unknown as Allocation[]
-    return { folder: this.folder, installationName: installation?.name as string ?? '', allocation: history.find(a => !a.retiredAt) ?? null, history }
+    return { folder: this.folder, libraryId: String(metadata.libraryId), installationName: installation?.name as string ?? '', allocation: history.find(a => !a.retiredAt) ?? null, history }
   }
   configure(value: unknown): LibraryInfo {
     validateSetup(value)
@@ -185,6 +188,55 @@ export class Library {
       finalizationState: row.status !== 'finalized' ? 'in_progress' : row.finalizedAssessmentRevision === row.assessmentRevision ? 'finalized' : 'changes_pending'
     })) as unknown as Card[]
     return { cards, total: Number(this.db.prepare('SELECT count(*) AS total FROM cards').get()!.total) }
+  }
+  publicSiteCards(): PublicCardSource[] {
+    const rows = this.db.prepare(`SELECT
+      cards.id, cards.serial, cards.game, cards.setName, cards.cardName, cards.cardNumber,
+      cards.year, cards.language, cards.variant, cards.rarity, cards.manufacturer,
+      inspections.centeringGrade, inspections.cornersGrade, inspections.edgesGrade,
+      inspections.surfaceGrade, inspections.estimatedGrade,
+      inspections.verticalLeftTop, inspections.verticalLeftBottom,
+      inspections.verticalRightTop, inspections.verticalRightBottom,
+      inspections.horizontalUpperLeft, inspections.horizontalUpperRight,
+      inspections.horizontalLowerLeft, inspections.horizontalLowerRight,
+      inspections.centeringNote, inspections.cornersNote, inspections.edgesNote, inspections.surfaceNote
+      FROM cards JOIN inspections ON inspections.cardId=cards.id
+      WHERE cards.status='finalized' AND cards.includePublic=1
+        AND cards.finalizedAssessmentRevision=inspections.assessmentRevision
+      ORDER BY cards.serial DESC`).all() as Record<string, unknown>[]
+    return rows.map(row => {
+      const cardId = String(row.id)
+      const markers = this.db.prepare('SELECT id,side,x,y,note FROM defect_markers WHERE cardId=? ORDER BY createdAt,rowid').all(cardId).map(marker => ({
+        sourceId: String(marker.id), side: marker.side as 'front' | 'back', x: Number(marker.x), y: Number(marker.y), note: marker.note === null ? null : String(marker.note)
+      })) satisfies PublicMarkerSource[]
+      const photoRows = this.db.prepare(`SELECT photos.* FROM photos WHERE photos.cardId=? AND (
+        photos.slot IS NOT NULL OR EXISTS (SELECT 1 FROM photo_defect_markers WHERE photoId=photos.id)
+      ) ORDER BY photos.createdAt,photos.id`).all(cardId) as unknown as PhotoRow[]
+      const photos = photoRows.map(photo => ({
+        sourceId: photo.id, slot: photo.slot, title: photo.title, originalFilename: photo.originalFilename,
+        sourcePath: this.ownedPath(photo.originalRelativePath), createdAt: photo.createdAt,
+        markerSourceIds: this.db.prepare('SELECT markerId FROM photo_defect_markers WHERE photoId=? ORDER BY markerId').all(photo.id).map(link => String(link.markerId))
+      })) satisfies PublicPhotoSource[]
+      const inspection = {
+        centeringGrade: Number(row.centeringGrade), cornersGrade: Number(row.cornersGrade), edgesGrade: Number(row.edgesGrade),
+        surfaceGrade: Number(row.surfaceGrade), estimatedGrade: Number(row.estimatedGrade),
+        verticalLeftTop: Number(row.verticalLeftTop), verticalLeftBottom: Number(row.verticalLeftBottom),
+        verticalRightTop: Number(row.verticalRightTop), verticalRightBottom: Number(row.verticalRightBottom),
+        horizontalUpperLeft: Number(row.horizontalUpperLeft), horizontalUpperRight: Number(row.horizontalUpperRight),
+        horizontalLowerLeft: Number(row.horizontalLowerLeft), horizontalLowerRight: Number(row.horizontalLowerRight),
+        centeringNote: row.centeringNote === null ? null : String(row.centeringNote),
+        cornersNote: row.cornersNote === null ? null : String(row.cornersNote),
+        edgesNote: row.edgesNote === null ? null : String(row.edgesNote),
+        surfaceNote: row.surfaceNote === null ? null : String(row.surfaceNote)
+      } satisfies PublicInspectionSource
+      return {
+        serial: String(row.serial), game: row.game === null ? null : String(row.game), setName: row.setName === null ? null : String(row.setName),
+        cardName: row.cardName === null ? null : String(row.cardName), cardNumber: row.cardNumber === null ? null : String(row.cardNumber),
+        year: row.year === null ? null : String(row.year), language: row.language === null ? null : String(row.language),
+        variant: row.variant === null ? null : String(row.variant), rarity: row.rarity === null ? null : String(row.rarity),
+        manufacturer: row.manufacturer === null ? null : String(row.manufacturer), inspection, markers, photos
+      }
+    })
   }
   save(id: unknown, revision: unknown, value: unknown): Card {
     validateId(id)
@@ -427,6 +479,10 @@ export class Library {
       try { rmSync(this.ownedPath(folder), { recursive: true, force: true }) } catch { /* Database ownership has already been removed safely. */ }
     }
     return result
+  }
+  async snapshot(destination: string): Promise<void> {
+    if (existsSync(destination)) rmSync(destination, { force: true })
+    await backup(this.db, destination)
   }
   close(): void { this.db.close() }
 }
