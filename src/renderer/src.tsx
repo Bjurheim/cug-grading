@@ -1,13 +1,13 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import {
-  fields, gradeFields, PAGE_SIZE, photoMediaUrl, photoSlots, serialText,
+  fields, gradeFields, measurementFields, measurementKey, PAGE_SIZE, photoMediaUrl, photoSlots, serialText,
   type Api, type ArchiveProgress, type Card, type CardDetail, type DefectMarker, type GradeField,
-  type LibraryInfo, type MeasurementField, type Metadata, type Photo,
+  type CenteringFace, type LibraryInfo, type MeasurementField, type MeasurementPosition, type Metadata, type Photo,
   type NoteField, type PrimaryPhotoSlot, type PublicSiteGenerated, type PublicSiteGenerationMode,
   type PublicSiteSettings, type Result, type Setup, type SiteProgress
 } from '../shared/contracts'
-import { apparentSkew, centeringRatio, formatGrade, formatMeasurement, parseFixedInput } from '../shared/inspection'
+import { apparentSkew, faceMeasurements, centeringRatio, formatGrade, formatMeasurement, parseFixedInput } from '../shared/inspection'
 import { CardAutosave, type SaveState } from './autosave'
 import './style.css'
 
@@ -330,12 +330,30 @@ function Overview({ detail, editor, busy, setPublic, deleteCard }: { detail: Car
 }
 
 const gradeNotes: Record<GradeField, NoteField> = { centeringGrade: 'centeringNote', cornersGrade: 'cornersNote', edgesGrade: 'edgesNote', surfaceGrade: 'surfaceNote', estimatedGrade: 'estimatedNote' }
-const measurementPairs: { label: string; direction: string; first: MeasurementField; second: MeasurementField; firstLabel: string; secondLabel: string }[] = [
-  { label: 'Vertical Left', direction: 'Top / Bottom', first: 'verticalLeftTop', second: 'verticalLeftBottom', firstLabel: 'Top Left', secondLabel: 'Bottom Left' },
-  { label: 'Vertical Right', direction: 'Top / Bottom', first: 'verticalRightTop', second: 'verticalRightBottom', firstLabel: 'Top Right', secondLabel: 'Bottom Right' },
-  { label: 'Horizontal Upper', direction: 'Left / Right', first: 'horizontalUpperLeft', second: 'horizontalUpperRight', firstLabel: 'Upper Left', secondLabel: 'Upper Right' },
-  { label: 'Horizontal Lower', direction: 'Left / Right', first: 'horizontalLowerLeft', second: 'horizontalLowerRight', firstLabel: 'Lower Left', secondLabel: 'Lower Right' }
+// DOM order follows the physical measurement workflow; the grid places Upper beside Top.
+// Vertical ratios still compare the top and bottom of each side, independently of input grouping.
+const measurementGroups: { label: string; first: MeasurementPosition; second: MeasurementPosition; firstLabel: string; secondLabel: string; ratioLabel: string; ratioFirst: MeasurementPosition; ratioSecond: MeasurementPosition }[] = [
+  { label: 'Top border', first: 'verticalLeftTop', second: 'verticalRightTop', firstLabel: 'Top Left', secondLabel: 'Top Right', ratioLabel: 'Vertical Left · Top / Bottom', ratioFirst: 'verticalLeftTop', ratioSecond: 'verticalLeftBottom' },
+  { label: 'Bottom border', first: 'verticalLeftBottom', second: 'verticalRightBottom', firstLabel: 'Bottom Left', secondLabel: 'Bottom Right', ratioLabel: 'Vertical Right · Top / Bottom', ratioFirst: 'verticalRightTop', ratioSecond: 'verticalRightBottom' },
+  { label: 'Horizontal Upper', first: 'horizontalUpperLeft', second: 'horizontalUpperRight', firstLabel: 'Upper Left', secondLabel: 'Upper Right', ratioLabel: 'Horizontal Upper · Left / Right', ratioFirst: 'horizontalUpperLeft', ratioSecond: 'horizontalUpperRight' },
+  { label: 'Horizontal Lower', first: 'horizontalLowerLeft', second: 'horizontalLowerRight', firstLabel: 'Lower Left', secondLabel: 'Lower Right', ratioLabel: 'Horizontal Lower · Left / Right', ratioFirst: 'horizontalLowerLeft', ratioSecond: 'horizontalLowerRight' }
 ]
+
+const measurementHints: Record<MeasurementPosition, string> = {
+  verticalLeftTop: 'Measure top border near left side', verticalLeftBottom: 'Measure bottom border near left side',
+  verticalRightTop: 'Measure top border near right side', verticalRightBottom: 'Measure bottom border near right side',
+  horizontalUpperLeft: 'Measure left border near upper side', horizontalUpperRight: 'Measure right border near upper side',
+  horizontalLowerLeft: 'Measure left border near lower side', horizontalLowerRight: 'Measure right border near lower side'
+}
+function MeasurementHelper({ position }: { position: MeasurementPosition }): React.JSX.Element {
+  const vertical = position.startsWith('vertical')
+  const x = vertical ? (position.includes('Left') ? 9 : 19) : (position.endsWith('Left') ? 4 : 20)
+  const y = vertical ? (position.endsWith('Top') ? 2 : 27) : (position.includes('Upper') ? 10 : 24)
+  const arrow = vertical
+    ? `M${x} ${y}v5 M${x-1.5} ${y+1.5}l1.5 -1.5 1.5 1.5 M${x-1.5} ${y+3.5}l1.5 1.5 1.5 -1.5`
+    : `M${x} ${y}h4 M${x+1.5} ${y-1.5}l-1.5 1.5 1.5 1.5 M${x+2.5} ${y-1.5}l1.5 1.5 -1.5 1.5`
+  return <svg className="measurement-helper" data-position={position} viewBox="0 0 28 34" aria-hidden="true"><title>{measurementHints[position]}</title><rect x="4" y="2" width="20" height="30" rx="2"/><rect className="helper-frame" x="8" y="7" width="12" height="20" rx="1"/><path d={arrow}/></svg>
+}
 
 function InspectionView({ detail, editor, busy, finalize, addMarker, removeMarker, selectedMarker, selectMarker, markerFocus, markerFocused, viewPhoto }: {
   detail: CardDetail; editor: CardAutosave; busy: boolean; finalize: () => void
@@ -345,13 +363,11 @@ function InspectionView({ detail, editor, busy, finalize, addMarker, removeMarke
 }): React.JSX.Element {
   const [drafts, setDrafts] = useState<Record<string, string>>(() => ({
     ...Object.fromEntries(Object.keys(gradeFields).map(key => [key, formatGrade(detail.inspection[key as GradeField])])),
-    ...Object.fromEntries(measurementPairs.flatMap(pair => [pair.first, pair.second]).map(key => [key, formatMeasurement(detail.inspection[key])]))
+    ...Object.fromEntries((Object.keys(measurementFields) as MeasurementField[]).map(key => [key, formatMeasurement(detail.inspection[key])]))
   }))
   const [invalid, setInvalid] = useState<Record<string, boolean>>({})
   const [inputError, setInputError] = useState('')
   const defects = useRef<HTMLElement | null>(null)
-  const hasInvalidMeasurement = measurementPairs.some(pair => invalid[pair.first] || invalid[pair.second])
-  const skew = hasInvalidMeasurement ? { state: 'unavailable' as const } : apparentSkew(detail.inspection)
   useLayoutEffect(() => {
     if (!markerFocus || markerFocus.id !== selectedMarker) return
     const frame = requestAnimationFrame(() => { defects.current?.scrollIntoView({ block: 'start' }); markerFocused(markerFocus.request) })
@@ -375,16 +391,27 @@ function InspectionView({ detail, editor, busy, finalize, addMarker, removeMarke
       <div className="grade-grid">{(Object.keys(gradeFields) as GradeField[]).map(key => <div className={key === 'estimatedGrade' ? 'grade-control estimated' : 'grade-control'} key={key}><label>{gradeFields[key]}<input aria-label={gradeFields[key]} className={invalid[key] ? 'invalid' : ''} inputMode="decimal" value={drafts[key] ?? ''} onChange={event => changeNumeric(key, event.target.value, 1)} onBlur={() => commitNumeric(key, 1)} placeholder="—"/></label><NotePopover label={`${gradeFields[key]} notes`} value={detail.inspection[gradeNotes[key]]} onChange={value => editor.editInspection(gradeNotes[key], value)}/></div>)}</div>
       <p className="microcopy">Estimated Grade is your judgment and is never calculated from the subgrades.</p>
     </section>
-    <section className="workbench-section centering"><div className="section-title"><div><div className="eyebrow">RAW MEASUREMENTS</div><h3>Centering</h3></div></div>
-      <div className="pair-grid">{measurementPairs.map(pair => <div className="measurement-pair" key={pair.label}><div className="pair-heading"><strong>{pair.label}</strong><small>{pair.direction}</small></div><div className="measurement-inputs">{([pair.first, pair.second] as MeasurementField[]).map((key, index) => <label key={key}>{index ? pair.secondLabel : pair.firstLabel}<span className="unit-input"><input aria-label={`${pair.label} ${index ? pair.secondLabel : pair.firstLabel}`} className={invalid[key] ? 'invalid' : ''} inputMode="decimal" value={drafts[key] ?? ''} onChange={event => changeNumeric(key, event.target.value, 2)} onBlur={() => commitNumeric(key, 2)} placeholder="—"/><span>mm</span></span></label>)}</div><div className="ratio"><span>Calculated ratio</span><strong>{invalid[pair.first] || invalid[pair.second] ? '—' : centeringRatio(detail.inspection[pair.first], detail.inspection[pair.second]) ?? '—'}</strong></div></div>)}</div>
-      <div className="skew-result"><div><span>Apparent skew</span><small>Approximate, using typical card dimensions</small></div><strong>{skew.state === 'none' ? 'No apparent skew' : skew.state === 'estimated' ? `~${skew.degrees!.toFixed(1)}° ${skew.direction}` : 'Unavailable'}</strong></div>
+    <section className="workbench-section centering"><div className="eyebrow">RAW MEASUREMENTS</div>
+      {(['front', 'back'] as CenteringFace[]).map(face => {
+        const values = faceMeasurements(detail.inspection, face)
+        const hasInvalid = measurementGroups.some(group => invalid[measurementKey(face, group.first)] || invalid[measurementKey(face, group.second)])
+        const skew = hasInvalid ? { state: 'unavailable' as const } : apparentSkew(values)
+        const faceLabel = face === 'front' ? 'Front' : 'Back'
+        return <div className="centering-face" key={face}><div className="section-title"><h3>Centering {faceLabel}</h3></div>
+          <div className="pair-grid">{measurementGroups.map(group => <div className="measurement-pair" key={group.label}><div className="pair-heading"><strong>{group.label}</strong><small>Left / Right</small></div><div className="measurement-inputs">{([group.first, group.second] as MeasurementPosition[]).map((position, index) => {
+            const key = measurementKey(face, position), label = index ? group.secondLabel : group.firstLabel
+            return <label key={key}><span className="measurement-label"><MeasurementHelper position={position}/>{label}</span><span className="unit-input"><input aria-label={`${faceLabel} ${label}`} className={invalid[key] ? 'invalid' : ''} inputMode="decimal" value={drafts[key] ?? ''} onChange={event => changeNumeric(key, event.target.value, 2)} onBlur={() => commitNumeric(key, 2)} placeholder="—"/><span>mm</span></span></label>
+          })}</div><div className="ratio"><span>{group.ratioLabel}</span><strong>{invalid[measurementKey(face, group.ratioFirst)] || invalid[measurementKey(face, group.ratioSecond)] ? '—' : centeringRatio(values[group.ratioFirst], values[group.ratioSecond]) ?? '—'}</strong></div></div>)}</div>
+          <div className="skew-result"><div><span>Apparent skew</span><small>Approximate, using typical card dimensions</small></div><strong>{skew.state === 'none' ? 'No apparent skew' : skew.state === 'estimated' ? `~${skew.degrees!.toFixed(1)}° ${skew.direction}` : 'Unavailable'}</strong></div>
+        </div>
+      })}
     </section>
     <section ref={defects} className="workbench-section defects"><div className="section-title"><div><div className="eyebrow">OPTIONAL EVIDENCE</div><h3>Defect map <span className="count">{detail.markers.length}</span></h3></div><span>Click a card to add</span></div>
       <div className="defect-layout"><div className="card-maps">{(['front', 'back'] as const).map(side => <DefectMap key={side} side={side} markers={detail.markers} selected={selectedMarker} select={selectMarker} add={addMarker}/>)}</div>
         <div className="marker-panel">{selectedMarker ? <MarkerEditor marker={detail.markers.find(marker => marker.id === selectedMarker)} index={detail.markers.findIndex(marker => marker.id === selectedMarker) + 1} photos={detail.photos} editor={editor} viewPhoto={viewPhoto} remove={() => { removeMarker(selectedMarker); selectMarker(null) }}/> : <div className="marker-empty"><strong>No marker selected</strong><p>Select a numbered marker to add a note or remove it.</p></div>}</div></div>
     </section>
     {inputError && <div role="alert" className="error">{inputError}<button aria-label="Dismiss input error" onClick={() => setInputError('')}>×</button></div>}
-    <section className="finalize-panel"><div><div className="eyebrow">WORKFLOW</div><h3>{detail.card.finalizationState === 'in_progress' ? 'Ready when you are' : detail.card.finalizationState === 'changes_pending' ? 'Review changes and finalize again' : 'Assessment finalized'}</h3><p>{detail.card.finalizedAt ? `Last finalized ${new Date(detail.card.finalizedAt).toLocaleString()}.` : 'Finalization checks only the thirteen required grading and centering values.'}</p></div><button className="primary finalize" disabled={busy} onClick={() => { if (Object.values(invalid).some(Boolean)) setInputError('Correct the highlighted numeric fields before finalizing.'); else finalize() }}>{detail.card.status === 'finalized' ? 'Finalize again' : 'Finalize assessment'}</button></section>
+    <section className="finalize-panel"><div><div className="eyebrow">WORKFLOW</div><h3>{detail.card.finalizationState === 'in_progress' ? 'Ready when you are' : detail.card.finalizationState === 'changes_pending' ? 'Review changes and finalize again' : 'Assessment finalized'}</h3><p>{detail.card.finalizedAt ? `Last finalized ${new Date(detail.card.finalizedAt).toLocaleString()}.` : 'Finalization checks only the twenty-one required grading and centering values.'}</p></div><button className="primary finalize" disabled={busy} onClick={() => { if (Object.values(invalid).some(Boolean)) setInputError('Correct the highlighted numeric fields before finalizing.'); else finalize() }}>{detail.card.status === 'finalized' ? 'Finalize again' : 'Finalize assessment'}</button></section>
   </div>
 }
 
@@ -513,8 +540,9 @@ function siteStageLabel(progress: SiteProgress): string {
 }
 
 function siteSummary(result: PublicSiteGenerated): string {
-  if (result.mode === 'rebuild') return `Public site rebuilt: ${result.rebuiltReports} ${result.rebuiltReports === 1 ? 'report' : 'reports'} rebuilt${result.removedReports ? `, ${result.removedReports} removed` : ''}.`
-  return `Public site updated: ${result.newReports} new, ${result.updatedReports} updated, ${result.removedReports} removed, ${result.unchangedReports} unchanged.`
+  const warning = result.warnings.length ? ` ${result.warnings.join(' ')}` : ''
+  if (result.mode === 'rebuild') return `Public site rebuilt: ${result.rebuiltReports} ${result.rebuiltReports === 1 ? 'report' : 'reports'} rebuilt.${warning}`
+  return `Public site updated: ${result.newReports} new, ${result.updatedReports} updated, ${result.removedReports} removed, ${result.unchangedReports} unchanged.${warning}`
 }
 
 function Settings({ info, busy, archiveProgress, siteProgress, siteSettings, onSubmit, onChoose, createArchive, restoreArchive, chooseSiteFolder, updateSite, rebuildSite }: { info: LibraryInfo; busy: boolean; archiveProgress: ArchiveProgress | null; siteProgress: SiteProgress | null; siteSettings: PublicSiteSettings; onSubmit: (setup: Setup) => void; onChoose: (create: boolean) => void; createArchive: () => void; restoreArchive: () => void; chooseSiteFolder: () => void; updateSite: () => void; rebuildSite: () => void }): React.JSX.Element {
@@ -527,9 +555,9 @@ function Settings({ info, busy, archiveProgress, siteProgress, siteSettings, onS
   const publicProgress = siteProgress ? `${siteStageLabel(siteProgress)}${siteProgress.total !== undefined && siteProgress.completed !== undefined ? ` ${siteProgress.completed} / ${siteProgress.total}` : ''}` : null
   return <><div className="settings"><div className="eyebrow">MAKE YOURSELF AT HOME</div><h1>{info.allocation ? 'Library settings' : 'Set up your workstation'}</h1><p>Give this installation a name and its own range of permanent serials.</p><form onSubmit={event => { event.preventDefault(); onSubmit({ name, start: Number(start), end: Number(end), next: Number(next) }) }}><fieldset disabled={busy}><label>Workstation name<input required maxLength={200} value={name} onChange={event => setName(event.target.value)}/></label><div className="settings-range"><label>First serial<input required inputMode="numeric" pattern="[0-9]{1,10}" value={start} onChange={event => setStart(event.target.value)}/></label><label>Last serial<input required inputMode="numeric" pattern="[0-9]{1,10}" value={end} onChange={event => setEnd(event.target.value)}/></label><label>Next serial<input required inputMode="numeric" pattern="[0-9]{1,10}" value={next} onChange={event => setNext(event.target.value)}/></label></div><div className="notice">The usual range is 50,000 serials per installation. Previously assigned serials stay reserved forever, including after card deletion.</div><button className="primary" type="submit">Save allocation</button></fieldset></form>{info.history.length > 0 && <section className="range-history"><h2>Allocation history</h2>{info.history.map(allocation => <div key={allocation.id}><span className="serial">{serialText(allocation.start)} – {serialText(allocation.end)}</span><span>{allocation.retiredAt ? 'Retired' : allocation.next > allocation.end ? 'Exhausted' : 'Current'}</span></div>)}</section>}
     <section className="archive-settings"><div><div className="eyebrow">MANUAL BACKUP & RECOVERY</div><h2>Library archive</h2><p>A <strong>.cug</strong> file is a standard ZIP containing a consistent catalogue snapshot and every original photo. Thumbnail caches are rebuilt and are not included.</p></div><div className="archive-actions"><article><h3>Create Library Archive</h3><p>Create one complete private backup of this library. Save it anywhere; backups are manual.</p><button disabled={busy} onClick={createArchive}>Create Library Archive…</button></article><article><h3>Restore Library Archive</h3><p>Restore a complete backup into a separate new or empty folder. Nothing is merged into this library.</p><button disabled={busy} onClick={restoreArchive}>Restore Library Archive…</button></article></div>{progress && <div className="archive-progress" role="status"><span className="progress-dot"/>{progress}</div>}<p className="archive-warning">Restore is for replacement or recovery. Do not edit the old and restored copies concurrently because they intentionally share installation identity and serial allocation history.</p></section>
-    <section className="site-settings"><div><div className="eyebrow">STATIC CARD REPORTS</div><h2>Public site</h2><p>Generate a static catalogue from finalized, current assessments that have <strong>Include on public site</strong> enabled. Submitted by, General Notes, and unlinked Additional Photos are never included.</p></div><div className="site-output"><span>Output folder</span><strong title={siteSettings.outputFolder ?? undefined}>{siteSettings.outputFolder ?? 'Choose a folder before generating'}</strong></div><div className="site-generation-actions"><div><button className="primary" disabled={busy} onClick={updateSite}>Update Public Site</button><p>Generates new and changed reports and removes outdated reports.</p></div><div><button disabled={busy} onClick={() => setConfirmRebuild(true)}>Rebuild Entire Site…</button><p>Recreates every public report and generated image.</p></div><button disabled={busy} onClick={chooseSiteFolder}>{siteSettings.outputFolder ? 'Change output folder…' : 'Choose output folder…'}</button></div>{publicProgress && <div className="archive-progress" role="status"><span className="progress-dot"/>{publicProgress}</div>}<p className="archive-warning">Generation updates only files owned by Cards Under Glass. Files such as <strong>.git</strong>, <strong>CNAME</strong>, and other user-managed content are preserved. No Git or hosting operation is performed.</p></section>
+    <section className="site-settings"><div><div className="eyebrow">STATIC CARD REPORTS</div><h2>Public site</h2><p>Generate a static catalogue from finalized, current assessments that have <strong>Include on public site</strong> enabled. Submitted by, General Notes, and unlinked Additional Photos are never included.</p></div><div className="site-output"><span>Output folder</span><strong title={siteSettings.outputFolder ?? undefined}>{siteSettings.outputFolder ?? 'Choose a folder before generating'}</strong></div><div className="site-generation-actions"><div><button className="primary" disabled={busy} onClick={updateSite}>Update Public Site</button><p>Publishes new and changed cards from this library and updates the combined catalogue.</p></div><div><button disabled={busy} onClick={() => setConfirmRebuild(true)}>Rebuild Public Site…</button><p>Rebuilds all published report pages using the current site design.</p></div><button disabled={busy} onClick={chooseSiteFolder}>{siteSettings.outputFolder ? 'Change output folder…' : 'Choose output folder…'}</button></div>{publicProgress && <div className="archive-progress" role="status"><span className="progress-dot"/>{publicProgress}</div>}<p className="archive-warning">Generation updates only files owned by Cards Under Glass. Files such as <strong>.git</strong>, <strong>CNAME</strong>, and other user-managed content are preserved. No Git or hosting operation is performed.</p></section>
     <section className="library-location"><h2>Library folder</h2><p>{info.folder}</p><div className="actions"><button disabled={busy} onClick={() => onChoose(false)}>Open another library</button><button disabled={busy} onClick={() => onChoose(true)}>Create another library</button></div></section></div>
-    {confirmRebuild && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setConfirmRebuild(false) }}><div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="rebuild-site-title"><div className="eyebrow">FULL PUBLIC-SITE REBUILD</div><h2 id="rebuild-site-title">Rebuild the entire public site?</h2><p>Every eligible report and generated image will be recreated. This may take longer for a large catalogue. User-managed files in the output folder remain untouched.</p><div className="actions"><button onClick={() => setConfirmRebuild(false)}>Cancel</button><button className="primary" onClick={() => { setConfirmRebuild(false); rebuildSite() }}>Rebuild entire site</button></div></div></div>}</>
+    {confirmRebuild && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if (event.target === event.currentTarget) setConfirmRebuild(false) }}><div className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="rebuild-site-title"><div className="eyebrow">PUBLIC-SITE REBUILD</div><h2 id="rebuild-site-title">Rebuild the public site?</h2><p>All currently published report pages will be recreated from their public snapshots using the current site design. Existing public images and user-managed files remain untouched.</p><div className="actions"><button onClick={() => setConfirmRebuild(false)}>Cancel</button><button className="primary" onClick={() => { setConfirmRebuild(false); rebuildSite() }}>Rebuild public site</button></div></div></div>}</>
 }
 
 createRoot(document.getElementById('root')!).render(<App/>)

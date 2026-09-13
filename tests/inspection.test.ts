@@ -1,17 +1,17 @@
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { Library } from '../src/main/library'
 import { migrations } from '../src/main/migrations'
-import { fields, gradeFields, measurementFields, noteFields, type Inspection, type Metadata } from '../src/shared/contracts'
-import { apparentSkew, centeringRatio, formatGrade, formatMeasurement, missingFinalizationFields, parseFixedInput } from '../src/shared/inspection'
+import { fields, gradeFields, measurementFields, measurementPositions, noteFields, type Inspection, type Metadata } from '../src/shared/contracts'
+import { apparentSkew, faceMeasurements, centeringRatio, formatGrade, formatMeasurement, missingFinalizationFields, parseFixedInput } from '../src/shared/inspection'
 
 function fixture(t: TestContext): { folder: string; lib: Library } {
   const folder = mkdtempSync(join(tmpdir(), 'cug-inspection-'))
-  const lib = new Library(folder, 'installation-a', true)
+  const lib = new Library(folder, 'installation-a', true, async (source, destination) => writeFileSync(destination, readFileSync(source)))
   t.after(() => { try { lib.close() } catch { /* already closed */ } rmSync(folder, { recursive: true, force: true }) })
   lib.configure({ name: 'Inspection desk', start: 1, end: 50000, next: 1 })
   return { folder, lib }
@@ -49,7 +49,7 @@ test('centering ratios preserve direction and handle empty or zero pairs', () =>
 })
 
 test('apparent skew estimates CW/CCW, neutral and contradictory measurements', () => {
-  const base = Object.fromEntries(Object.keys(measurementFields).map(key => [key, 200])) as Pick<Inspection, keyof typeof measurementFields>
+  const base = Object.fromEntries(Object.keys(measurementPositions).map(key => [key, 200])) as Parameters<typeof apparentSkew>[0]
   assert.deepEqual(apparentSkew(base), { state: 'none' })
   const clockwise = { ...base, verticalLeftBottom: 138, verticalRightBottom: 262, horizontalUpperRight: 244, horizontalLowerLeft: 244 }
   const cw = apparentSkew(clockwise)
@@ -64,7 +64,7 @@ test('finalization validates required data and tracks only required assessment c
   const { lib } = fixture(t)
   let detail = lib.create()
   assert.equal(detail.card.includePublic, true)
-  assert.deepEqual(missingFinalizationFields(detail.inspection).length, 13)
+  assert.deepEqual(missingFinalizationFields(detail.inspection).length, 21)
   assert.throws(() => lib.finalize(detail.card.id, detail.card.revision), /Complete these required/)
   const withoutCenteringGrade = { ...complete(detail.inspection), centeringGrade: null }
   let saved = lib.saveInspection(detail.card.id, detail.card.revision, withoutCenteringGrade)
@@ -159,7 +159,7 @@ test('migration upgrades a milestone-1 database and reserves its existing serial
     assert.equal(detail.card.finalizationState, 'in_progress')
     assert.equal(lib.create().card.serial, '0000000002')
     const migrated = new DatabaseSync(join(folder, 'catalogue.sqlite'))
-    try { assert.equal(migrated.prepare('SELECT count(*) AS total FROM schema_migrations').get()!.total, 5); assert.equal(migrated.prepare('SELECT count(*) AS total FROM serial_reservations').get()!.total, 2) } finally { migrated.close() }
+    try { assert.equal(migrated.prepare('SELECT count(*) AS total FROM schema_migrations').get()!.total, 6); assert.equal(migrated.prepare('SELECT count(*) AS total FROM serial_reservations').get()!.total, 2) } finally { migrated.close() }
   } finally { lib.close() }
 })
 
@@ -194,7 +194,7 @@ test('migration replaces the milestone-2 Defects grade without repurposing data 
     assert.equal(detail.inspection.centeringNote, 'Original centering judgment')
     assert.equal(Object.hasOwn(detail.inspection, 'defectsGrade'), false)
     assert.equal(Object.hasOwn(detail.inspection, 'defectsNote'), false)
-    assert.equal(detail.inspection.assessmentRevision, 8)
+    assert.equal(detail.inspection.assessmentRevision, 9)
     assert.equal(detail.card.finalizationState, 'changes_pending')
     assert.deepEqual(detail.markers.map(marker => [marker.id, marker.side, marker.x, marker.y, marker.note]), [['old-marker', 'back', 0.2, 0.8, 'Preserve me']])
     const columns = new DatabaseSync(databasePath)
@@ -205,4 +205,122 @@ test('migration replaces the milestone-2 Defects grade without repurposing data 
       assert.equal(names.includes('defectsNote'), false)
     } finally { columns.close() }
   } finally { lib.close() }
+})
+
+test('front and back measurements are independent and every required numeric value is validated', t => {
+  const { lib } = fixture(t)
+  let detail = lib.create()
+  assert.equal(Object.keys(measurementFields).length, 16)
+  assert.equal(Object.keys(gradeFields).length, 5)
+  const inspection = complete(detail.inspection)
+  inspection.frontVerticalLeftTop = 200; inspection.frontVerticalLeftBottom = 300
+  inspection.backVerticalLeftTop = 300; inspection.backVerticalLeftBottom = 200
+  let saved = lib.saveInspection(detail.card.id, detail.card.revision, inspection)
+  assert.equal(centeringRatio(saved.inspection.frontVerticalLeftTop, saved.inspection.frontVerticalLeftBottom), '40.0 / 60.0')
+  assert.equal(centeringRatio(saved.inspection.backVerticalLeftTop, saved.inspection.backVerticalLeftBottom), '60.0 / 40.0')
+  const frontBefore = faceMeasurements(saved.inspection, 'front')
+  saved = lib.saveInspection(detail.card.id, saved.card.revision, { ...saved.inspection, backVerticalLeftTop: 250 })
+  assert.deepEqual(faceMeasurements(saved.inspection, 'front'), frontBefore)
+  assert.equal(formatMeasurement(saved.inspection.backVerticalLeftTop), '2.50')
+  const backBefore = faceMeasurements(saved.inspection, 'back')
+  saved = lib.saveInspection(detail.card.id, saved.card.revision, { ...saved.inspection, frontVerticalLeftTop: null })
+  assert.deepEqual(faceMeasurements(saved.inspection, 'back'), backBefore)
+  assert.equal(formatMeasurement(saved.inspection.frontVerticalLeftTop), '')
+  assert.throws(() => lib.finalize(detail.card.id, saved.card.revision), /Front — Top Left/)
+
+  for (const key of [...Object.keys(measurementFields), ...Object.keys(gradeFields)] as (keyof typeof measurementFields | keyof typeof gradeFields)[]) {
+    const incomplete = { ...complete(saved.inspection), [key]: null }
+    saved = lib.saveInspection(detail.card.id, saved.card.revision, incomplete)
+    assert.throws(() => lib.finalize(detail.card.id, saved.card.revision), /Complete these required/)
+  }
+  const oldCompletion = complete(saved.inspection)
+  for (const key of Object.keys(measurementFields).filter(key => key.startsWith('back')) as (keyof typeof measurementFields)[]) oldCompletion[key] = null
+  saved = lib.saveInspection(detail.card.id, saved.card.revision, oldCompletion)
+  assert.equal(missingFinalizationFields(saved.inspection).length, 8)
+  assert.throws(() => lib.finalize(detail.card.id, saved.card.revision), /Back/)
+  saved = lib.saveInspection(detail.card.id, saved.card.revision, complete(saved.inspection))
+  detail = lib.finalize(detail.card.id, saved.card.revision)
+  for (const key of ['frontVerticalLeftTop', 'backVerticalLeftTop'] as const) {
+    saved = lib.saveInspection(detail.card.id, detail.card.revision, { ...detail.inspection, [key]: 235 })
+    assert.equal(saved.card.finalizationState, 'changes_pending')
+    detail = lib.finalize(detail.card.id, saved.card.revision)
+    assert.equal(detail.card.finalizationState, 'finalized')
+  }
+  const front = faceMeasurements(detail.inspection, 'front'), back = faceMeasurements(detail.inspection, 'back')
+  assert.deepEqual(apparentSkew(front), apparentSkew(back))
+  const cw = { ...back, verticalLeftTop: 200, verticalRightTop: 200, verticalLeftBottom: 138, verticalRightBottom: 262, horizontalUpperRight: 244, horizontalLowerLeft: 244 }
+  assert.equal(apparentSkew(cw).direction, 'CW')
+  assert.equal(apparentSkew({ ...cw, verticalLeftBottom: 1000 }).state, 'unavailable')
+  assert.deepEqual(apparentSkew(Object.fromEntries(Object.keys(measurementPositions).map(key => [key, 200])) as typeof back), { state: 'none' })
+})
+
+test('migration 6 preserves old Front values and finalized history, leaves Back blank, and preserves photo evidence', async t => {
+  const { folder, lib } = fixture(t)
+  let detail = lib.create()
+  const inspection = complete(detail.inspection)
+  for (const [index, position] of Object.keys(measurementPositions).entries()) inspection[('front' + position[0].toUpperCase() + position.slice(1)) as keyof typeof measurementFields] = 200 + index
+  let saved = lib.saveInspection(detail.card.id, detail.card.revision, inspection)
+  detail = lib.finalize(detail.card.id, saved.card.revision)
+  const libraryId = lib.info().libraryId
+  const marker = lib.addMarker(detail.card.id, 'back', .25, .75)
+  lib.saveMarker(marker.id, 'Retain evidence')
+  const source = join(folder, 'source.png'); writeFileSync(source, 'source')
+  const imported = await lib.importPhotos(detail.card.id, 'full_back', [source])
+  lib.setPhotoMarkers(imported.photos[0].id, [marker.id])
+  const previous = lib.get(detail.card.id)
+  lib.close()
+  const db = new DatabaseSync(join(folder, 'catalogue.sqlite'))
+  for (const position of Object.keys(measurementPositions)) {
+    const suffix = position[0].toUpperCase() + position.slice(1)
+    db.exec(`ALTER TABLE inspections DROP COLUMN back${suffix}; ALTER TABLE inspections RENAME COLUMN front${suffix} TO ${position};`)
+  }
+  db.exec('DELETE FROM schema_migrations WHERE version=6')
+  db.close()
+  const reopened = new Library(folder, 'installation-a')
+  try {
+    detail = reopened.get(previous.card.id)
+    assert.equal(reopened.info().libraryId, libraryId)
+    assert.equal(detail.card.serial, previous.card.serial)
+    assert.equal(detail.card.id, previous.card.id)
+    assert.equal(detail.card.finalizedAt, previous.card.finalizedAt)
+    assert.equal(detail.card.finalizedAssessmentRevision, previous.card.finalizedAssessmentRevision)
+    assert.equal(detail.inspection.assessmentRevision, previous.inspection.assessmentRevision + 1)
+    assert.equal(detail.card.status, 'finalized')
+    assert.equal(detail.card.finalizationState, 'changes_pending')
+    assert.deepEqual(faceMeasurements(detail.inspection, 'front'), faceMeasurements(previous.inspection, 'front'))
+    assert.ok(Object.values(faceMeasurements(detail.inspection, 'back')).every(value => value === null))
+    assert.deepEqual(detail.markers, previous.markers)
+    assert.deepEqual(detail.photos, previous.photos)
+    for (const key of Object.keys(gradeFields) as (keyof typeof gradeFields)[]) assert.equal(detail.inspection[key], previous.inspection[key])
+    assert.equal(reopened.publicSiteCards().length, 0)
+    assert.throws(() => reopened.finalize(detail.card.id, detail.card.revision), /Back/)
+    saved = reopened.saveInspection(detail.card.id, detail.card.revision, { ...detail.inspection, ...Object.fromEntries(Object.keys(measurementFields).filter(key => key.startsWith('back')).map(key => [key, 250])) })
+    detail = reopened.finalize(detail.card.id, saved.card.revision)
+    assert.equal(detail.card.finalizationState, 'finalized')
+  } finally { reopened.close() }
+  const again = new Library(folder, 'installation-a')
+  try { assert.equal(again.get(detail.card.id).inspection.assessmentRevision, detail.inspection.assessmentRevision) } finally { again.close() }
+})
+
+test('all four directional ratios and skew are derived independently for each face', () => {
+  const inspection = { ...Object.fromEntries(Object.keys(measurementFields).map(key => [key, 200])),
+    frontVerticalLeftTop: 200, frontVerticalLeftBottom: 300, frontVerticalRightTop: 100, frontVerticalRightBottom: 400,
+    frontHorizontalUpperLeft: 300, frontHorizontalUpperRight: 200, frontHorizontalLowerLeft: 400, frontHorizontalLowerRight: 100,
+    backVerticalLeftTop: 300, backVerticalLeftBottom: 200, backVerticalRightTop: 400, backVerticalRightBottom: 100,
+    backHorizontalUpperLeft: 200, backHorizontalUpperRight: 300, backHorizontalLowerLeft: 100, backHorizontalLowerRight: 400
+  } as Inspection
+  const ratios = (face: 'front' | 'back') => {
+    const v = faceMeasurements(inspection, face)
+    return [
+      centeringRatio(v.verticalLeftTop, v.verticalLeftBottom), centeringRatio(v.verticalRightTop, v.verticalRightBottom),
+      centeringRatio(v.horizontalUpperLeft, v.horizontalUpperRight), centeringRatio(v.horizontalLowerLeft, v.horizontalLowerRight)
+    ]
+  }
+  assert.deepEqual(ratios('front'), ['40.0 / 60.0', '20.0 / 80.0', '60.0 / 40.0', '80.0 / 20.0'])
+  assert.deepEqual(ratios('back'), ['60.0 / 40.0', '80.0 / 20.0', '40.0 / 60.0', '20.0 / 80.0'])
+  const originalFront = ratios('front'), frontSkew = apparentSkew(faceMeasurements(inspection, 'front'))
+  inspection.backHorizontalUpperRight = 1000
+  assert.deepEqual(ratios('front'), originalFront)
+  assert.deepEqual(apparentSkew(faceMeasurements(inspection, 'front')), frontSkew)
+  assert.equal(apparentSkew(faceMeasurements(inspection, 'back')).state, 'unavailable')
 })

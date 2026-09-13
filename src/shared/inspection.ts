@@ -1,4 +1,4 @@
-import { gradeFields, measurementFields, type Inspection, type MeasurementField } from './contracts'
+import { gradeFields, measurementFields, measurementPositions, measurementKey, type CenteringFace, type Inspection, type MeasurementField, type MeasurementPosition } from './contracts'
 
 export type ParsedFixed = { valid: true; value: number | null } | { valid: false }
 
@@ -22,8 +22,13 @@ export function centeringRatio(first: number | null, second: number | null): str
 
 export interface SkewResult { state: 'unavailable' | 'none' | 'estimated'; degrees?: number; direction?: 'CW' | 'CCW' }
 
-export function apparentSkew(inspection: Pick<Inspection, MeasurementField>): SkewResult {
-  const values = Object.keys(measurementFields).map(key => inspection[key as MeasurementField])
+export type FaceMeasurements = Record<MeasurementPosition, number | null>
+export function faceMeasurements(inspection: Pick<Inspection, MeasurementField>, face: CenteringFace): FaceMeasurements {
+  return Object.fromEntries(Object.keys(measurementPositions).map(position => [position, inspection[measurementKey(face, position as MeasurementPosition)]])) as FaceMeasurements
+}
+
+export function apparentSkew(inspection: FaceMeasurements): SkewResult {
+  const values = Object.keys(measurementPositions).map(key => inspection[key as MeasurementPosition])
   if (values.some(value => value === null || value < 0)) return { state: 'unavailable' }
   const vlt = inspection.verticalLeftTop! / 100, vlb = inspection.verticalLeftBottom! / 100
   const vrt = inspection.verticalRightTop! / 100, vrb = inspection.verticalRightBottom! / 100
@@ -42,7 +47,7 @@ export function apparentSkew(inspection: Pick<Inspection, MeasurementField>): Sk
 
 export function missingFinalizationFields(inspection: Inspection): string[] {
   const missing: string[] = []
-  for (const [key, label] of Object.entries(measurementFields)) if (inspection[key as MeasurementField] === null) missing.push(label)
-  for (const [key, label] of Object.entries(gradeFields)) if (inspection[key as keyof typeof gradeFields] === null) missing.push(label)
+  for (const [key, label] of Object.entries(measurementFields)) if (!Number.isSafeInteger(inspection[key as MeasurementField]) || inspection[key as MeasurementField]! < 0) missing.push(label)
+  for (const [key, label] of Object.entries(gradeFields)) if (!Number.isSafeInteger(inspection[key as keyof typeof gradeFields]) || inspection[key as keyof typeof gradeFields]! < 0 || inspection[key as keyof typeof gradeFields]! > 100) missing.push(label)
   return missing
 }

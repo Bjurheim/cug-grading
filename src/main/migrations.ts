@@ -155,7 +155,25 @@ export const migrations = [
    CREATE TRIGGER no_library_identity_update BEFORE UPDATE OF libraryId ON library_metadata
      BEGIN SELECT RAISE(ABORT, 'Library identity is permanent'); END;
    CREATE TRIGGER no_library_metadata_delete BEFORE DELETE ON library_metadata
-     BEGIN SELECT RAISE(ABORT, 'Library identity is permanent'); END;`
+     BEGIN SELECT RAISE(ABORT, 'Library identity is permanent'); END;`,
+  `ALTER TABLE inspections RENAME COLUMN verticalLeftTop TO frontVerticalLeftTop;
+   ALTER TABLE inspections RENAME COLUMN verticalLeftBottom TO frontVerticalLeftBottom;
+   ALTER TABLE inspections RENAME COLUMN verticalRightTop TO frontVerticalRightTop;
+   ALTER TABLE inspections RENAME COLUMN verticalRightBottom TO frontVerticalRightBottom;
+   ALTER TABLE inspections RENAME COLUMN horizontalUpperLeft TO frontHorizontalUpperLeft;
+   ALTER TABLE inspections RENAME COLUMN horizontalUpperRight TO frontHorizontalUpperRight;
+   ALTER TABLE inspections RENAME COLUMN horizontalLowerLeft TO frontHorizontalLowerLeft;
+   ALTER TABLE inspections RENAME COLUMN horizontalLowerRight TO frontHorizontalLowerRight;
+   ALTER TABLE inspections ADD COLUMN backVerticalLeftTop INTEGER CHECK(backVerticalLeftTop >= 0);
+   ALTER TABLE inspections ADD COLUMN backVerticalLeftBottom INTEGER CHECK(backVerticalLeftBottom >= 0);
+   ALTER TABLE inspections ADD COLUMN backVerticalRightTop INTEGER CHECK(backVerticalRightTop >= 0);
+   ALTER TABLE inspections ADD COLUMN backVerticalRightBottom INTEGER CHECK(backVerticalRightBottom >= 0);
+   ALTER TABLE inspections ADD COLUMN backHorizontalUpperLeft INTEGER CHECK(backHorizontalUpperLeft >= 0);
+   ALTER TABLE inspections ADD COLUMN backHorizontalUpperRight INTEGER CHECK(backHorizontalUpperRight >= 0);
+   ALTER TABLE inspections ADD COLUMN backHorizontalLowerLeft INTEGER CHECK(backHorizontalLowerLeft >= 0);
+   ALTER TABLE inspections ADD COLUMN backHorizontalLowerRight INTEGER CHECK(backHorizontalLowerRight >= 0);
+   UPDATE inspections SET assessmentRevision=assessmentRevision+1
+     WHERE cardId IN (SELECT id FROM cards WHERE status='finalized');`
 ]
 export function migrate(db: DatabaseSync): void {
   db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, appliedAt TEXT NOT NULL)')

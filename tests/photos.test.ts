@@ -167,7 +167,7 @@ test('migration 4 upgrades the corrected Milestone 2 schema and preserves marker
     assert.equal(detail.photos.length, 0)
     assert.equal(detail.markers[0].note, 'Still here')
     const migrated = new DatabaseSync(join(folder, 'catalogue.sqlite'))
-    try { assert.equal(migrated.prepare('SELECT count(*) AS total FROM schema_migrations').get()!.total, 5); assert.ok(migrated.prepare("SELECT name FROM sqlite_master WHERE name='photos'").get()) } finally { migrated.close() }
+    try { assert.equal(migrated.prepare('SELECT count(*) AS total FROM schema_migrations').get()!.total, 6); assert.ok(migrated.prepare("SELECT name FROM sqlite_master WHERE name='photos'").get()) } finally { migrated.close() }
   } finally { lib.close() }
 })
 

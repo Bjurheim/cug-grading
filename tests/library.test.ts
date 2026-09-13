@@ -76,8 +76,8 @@ test('migrations are idempotent, transactional, and reject future versions', () 
   const db = new DatabaseSync(':memory:')
   try {
     migrate(db); migrate(db)
-    assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()!.n, 5)
-    db.exec("INSERT INTO schema_migrations VALUES (6,'future')")
+    assert.equal(db.prepare('SELECT count(*) AS n FROM schema_migrations').get()!.n, 6)
+    db.exec("INSERT INTO schema_migrations VALUES (7,'future')")
     assert.throws(() => migrate(db), /unsupported schema/)
   } finally { db.close() }
   const broken = new DatabaseSync(':memory:')

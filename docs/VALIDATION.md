@@ -1,5 +1,88 @@
 # Validation history
 
+## Public report Defect Map placement
+
+Observed on 2026-09-13, macOS arm64, using disposable libraries and site folders. The only production changes move the intact Defect Map after the Corner/Edge photo grid and advance `REPORT_FORMAT_VERSION` from 2 to 3. Snapshot format/schema remain 2, image pipeline remains 1, and content fingerprints are unchanged.
+
+- `pnpm check` passed strict TypeScript, all 50 service/integration tests, and the production build. Focused tests verify Centering → Corners → Edges → Defect Map, one occurrence of every section, marker/details/evidence content, and the unchanged zero-defect empty state. Updating report format 2 to 3 rewrites HTML without changing public card data/fingerprint or running image processing; derivative modification times remain unchanged.
+- Current foreign reports and explicit legacy/orphaned snapshots rebuild in the new order without their source libraries, preserving ownership and media. Existing privacy and root/`/project/` static-host tests pass.
+- All six real Electron workflows passed after extending the fixture with Corner/Edge photos, front/back defects and Additional evidence. Browser checks verify section order and that the Defect Map's visual position is below the photo grid, marker selection/details, evidence lightbox and Escape at both `/` and `/project/`. A zero-defect report retains “No defects documented.” in its new position. The full report, Corner/Edge grid, populated Defect Map and empty Defect Map captures were visually reviewed; styling is unchanged. The old single-marker geometry assertion was updated to check both fixture markers.
+- Strict TypeScript was rerun after that test assertion fix; `git diff --check` passed. No database migration or package rebuild was needed/requested.
+
+## Physical centering measurement workflow
+
+Observed on 2026-09-13, macOS arm64, using disposable catalogues and profiles. This is a renderer-only reorder: no database, migration, public snapshot/report, formula, finalization, archive or autosave changes.
+
+- Both faces retain four styled panels: Top/Upper on the first row, Bottom/Lower on the second. DOM order is Top, Bottom, Upper, Lower, producing the requested eight-field Tab sequence per face without explicit tab indexes. Below 760px, panels stack in DOM order.
+- Electron tests check both faces' actual input DOM order, forward/reverse keyboard focus at laptop and 720px widths, panel coordinates at wide and narrow widths, and every helper icon's association with its label. Unique values in all 16 inputs survive immediate Overview/Inspection navigation. Asymmetric values confirm Vertical Left still compares Top Left/Bottom Left, Vertical Right compares Top Right/Bottom Right, and horizontal comparisons are unchanged.
+- Laptop Front/Back and narrow Back captures were visually reviewed. Existing panel styling, inputs, units, icons, spacing and skew presentation remain recognizable. Vertical ratio footers now state their Top/Bottom comparison explicitly, independently of the input grouping.
+- `pnpm check` passed: strict TypeScript, all 49 service/integration tests, and production build. `pnpm test:desktop` passed all six workflows, including the focused layout/focus/icon/ratio/autosave coverage and existing navigation/photo/public-site/archive behavior. No lint command is configured.
+- `pnpm test:development` passed startup, renderer reload and trusted IPC; `git diff --check` passed. Package artifacts were not rebuilt for this UI-only task.
+
+## Front and Back centering model
+
+Observed on 2026-09-13, macOS arm64, using disposable catalogues, profiles, archives and public-site folders. No user library was migrated during validation.
+
+### Model, compatibility and UI
+
+- Migration 6 preserves all eight existing measurements as explicitly named Front fields, adds eight nullable Back fields, and advances only finalized assessment revisions once. It retains grades, card/serial/library identities, timestamps and finalized revisions, photo/marker/link records, allocation history and reservations. Opening again does not repeat the migration. Previously finalized cards show changes pending and require Back plus re-finalization.
+- Finalization requires all 21 numeric values. Tests omit each of the 16 measurements and five grading inputs in turn; all fail cleanly. Front/Back values save independently, retain hundredths and nulls, and required edits on either face invalidate finalization. Photos, markers, metadata and notes remain optional.
+- Each face uses the unchanged four directional ratios and the unchanged 63.5 × 88.9 mm apparent-skew assumptions, 1° contradiction threshold and 0.05° neutral threshold. Calculation coverage verifies directional results, independent face changes, CW/CCW, contradiction and near-zero behavior.
+- Inspection renders one Centering grade/note, then Centering Front and Centering Back stacked within one measurement panel. All 16 fields have subtle inline SVG card/double-headed-distance-arrow helpers, reusing eight positions with accessible text labels. Real Tab/Shift+Tab coverage traverses all Front fields then Back fields and reverses that sequence; decorative helpers have `aria-hidden` and no tab index. Captures at 1050×760 and the narrower desktop window were inspected: fields stay contained, the divider is restrained, and the sticky identity/navigation remain usable.
+- Public report format 2 and snapshot format 2/public schema 2 include both faces and one Centering subgrade. Back edits change the public fingerprint. Exact current-schema validation rejects a missing Back field without changing the prior report. Explicit legacy format/schema 1 parsing verifies the original fingerprint, maps old values only to Front for presentation, and shows that Back was not recorded. Foreign/orphaned legacy reports and their media survive Update/Rebuild; migrated ineligible local-owned reports disappear on Update and return only after completion/re-finalization.
+- The real Electron public-site workflow generates realistic independent Front CW and Back CCW reports, captures desktop (1280×900), laptop (1000×760) and mobile (420×800) presentation, checks no laptop/mobile horizontal overflow, and retains search, defects, linked evidence, viewer and privacy behavior. Detailed laptop/mobile centering captures were visually inspected: both faces remain stacked, ratios and raw values are readable, and mobile technical information stacks beneath each face's ratios. Existing root and `/project/` static-host coverage passes. Public snapshots/output remain allowlisted with no private values, internal UUIDs or local source paths.
+- Archive format remains `.cug` ZIP version 1. Tests archive schema 6 and verify distinct Front/Back measurements plus finalization state survive restore naturally in the SQLite snapshot.
+
+### Validation results
+
+- `pnpm check`: strict TypeScript, all 49 service/integration tests, and production main/preload/renderer build passed. No separate lint command is configured; strict TypeScript checks unused code.
+- `pnpm test:desktop`: all six Electron workflows passed, including a Back edit immediately before protected Command+Q, close/relaunch persistence, tab navigation flush, all existing photo/navigation/archive/public-site behavior, and visual captures.
+- `pnpm test:development`: startup, renderer reload and trusted IPC passed.
+- `pnpm test:packaged`: all six Electron workflows passed against the exact rebuilt macOS arm64 application, including Back save/quit/relaunch, report rendering, real Sharp processing and existing workflows.
+- `git diff --check`: passed.
+- `pnpm package:all`: current version 0.1.0 macOS arm64 DMG/ZIP, Windows x64 NSIS, and Linux x64 AppImage/DEB packages were rebuilt. Structural validation passed for executable/native Sharp/libvips format and architecture, current Front/Back model markers, version and required artifacts. SQLite remains Electron's target-native builtin. Exact sizes/checksums are recorded in `release/package-manifest.json`; the artifact table below is refreshed to this run. Windows/Linux were not runtime-tested here.
+
+### Recommended native/manual checks
+
+1. Archive a disposable older library before opening it. Confirm old values appear only under Front, Back is blank, finalized history remains and the state is changes pending. Fill Back, finalize again, close and relaunch.
+2. At normal display scale on a laptop, review all eight helper positions on both faces, natural Tab/Shift+Tab order, partial/invalid input, fixed two-decimal formatting and independent ratios/skew.
+3. Update a shared site with an ineligible migrated local card and legacy foreign report: only the local report should disappear. Complete/re-finalize it and verify both-face output returns. Rebuild with the foreign source unavailable and confirm its explicit legacy Back notice and images remain.
+4. Repeat Back save/quit/relaunch, archive/restore, photo processing and public-site Update/Rebuild in native Windows/Linux packages. Structural cross-packaging on macOS cannot prove their runtime behavior.
+
+
+## Multi-library Public Site publishing
+
+Observed on 2026-09-11, macOS arm64, using disposable Library A, Library B, collision, archive/restore and static-site folders. This generator-only change adds no SQLite migration or new renderer filesystem authority.
+
+### Model and safety exercised
+
+- Owner derivation is deterministic SHA-256 over the fixed `cards-under-glass-public-owner:` domain plus immutable lowercase library UUID. Distinct UUIDs produce distinct 64-character keys. Only the per-card public snapshot carries the opaque owner key; generated HTML, catalogue/search JSON, JavaScript, the global ownership manifest and media never contain the raw library UUID, installation/workstation identity, card/marker/photo UUIDs, local paths, Submitted by, General Notes or unlinked Additional Photos.
+- Every published serial receives `data/cards/<serial>.json` snapshot format 1/public schema 1. Exact-key/type/path validation, sequential public marker numbers and fingerprint verification reject malformed or private-field-expanded snapshots before destination mutation. The site ownership manifest is format 2/generation state 2 and owns only five shared/global files.
+- Library A published two reports, then Library B published two non-overlapping reports into the same destination. Both catalogues were combined in serial-descending order. B's no-op update preserved A snapshot/report/media nanosecond modification times. A and B updates/removals affected only their own cards; the other library's files remained.
+- A third library attempted to publish A's serial. Collision preflight returned the allocation-range guidance and byte comparisons proved the prior manifest and catalogue were unchanged.
+- A report-format-version bump rebuilt both owners' report HTML from snapshots after Library A was closed. Its public image bytes and modification time remained unchanged. An image-pipeline bump while B was active processed only B's source photo and retained A's derivative unchanged.
+- Separate A/B sites were externally combined by copying B's snapshot, report and media into A's destination while leaving deliberately stale global catalogue/search files. A subsequent A Update preserved B's files and reconstructed `index.html`/`data/reports.json` from both snapshots.
+- A format-1 incremental site migrated an attributable local report without rerunning image processing. A deliberately unattributable legacy report remained byte-for-byte in place, received no invented owner/snapshot, and produced a non-destructive warning.
+- Library A was archived to `.cug`, restored, opened under a different installation identity and shown to derive the same owner from the restored immutable library UUID. The restored catalogue updated and then removed its prior report without ownership configuration.
+- Rebuilt multi-library output was served successfully both at `/` and `/project/`; combined catalogue, both serial report URLs and foreign image references returned successfully. Existing root/subdirectory search, lightbox, report and privacy validation continues to pass.
+
+### Automated results
+
+- `pnpm check`: strict TypeScript, all 45 service/integration tests, and the production Electron/Vite main/preload/renderer build passed.
+- `pnpm test:desktop`: all six Electron workflows passed, including the renamed **Rebuild Public Site…** confirmation, Update/Rebuild output, static catalogue/search/report/lightbox behavior, privacy checks and existing persistence/navigation/photo/archive coverage.
+- `pnpm test:development`: the Electron/Vite development application loaded, reloaded and retained the trusted typed IPC boundary.
+- `pnpm package:all`: rebuilt version `0.1.0` macOS arm64 DMG/ZIP, Windows x64 NSIS, and Linux x64 AppImage/DEB packages from current source. All packages passed current-feature-marker, executable architecture, Sharp/libvips target-binary and artifact validation; `release/package-manifest.json` records their sizes and SHA-256 checksums.
+- `pnpm test:packaged`: all six Electron workflows passed by launching the exact rebuilt macOS arm64 package, including public snapshots, Update/Rebuild, privacy, static serving, archive, photo, navigation and persistence paths.
+- `git diff --check`: passed.
+- No separate lint command is configured; strict TypeScript checks unused locals and parameters.
+
+### Manual target checks
+
+1. Externally synchronize a shared site folder to Windows/Linux, run **Update Public Site** from a library with a distinct serial range, and confirm existing foreign reports and images keep their timestamps/content.
+2. Test an intentional duplicate serial and confirm the visible collision message appears before any site file changes.
+3. Run **Rebuild Public Site…** with an originating library unavailable and confirm its orphaned report and images remain usable.
+4. Exercise the external-tool workflow: pull/synchronize first, Update, then synchronize/push. For a simulated global-file conflict, retain independent `data/cards` snapshots/media and rerun Update to repair the aggregate.
+
 ## Remembered native photo-picker directory
 
 Observed on 2026-09-11, macOS arm64. All application profiles, libraries, source folders and images were disposable test data. This workflow-only change adds no SQLite migration or IPC/preload surface.
@@ -43,17 +126,17 @@ Observed on 2026-09-11 from macOS arm64. The release tree was cleaned before the
 
 ### Final artifacts and structural validation
 
-`pnpm package:all` completed successfully from one current production build. `release/package-manifest.json` records byte sizes and SHA-256 checksums.
+`pnpm package:all` completed successfully from one current production build. This artifact table was refreshed on 2026-09-13 for the Front/Back centering milestone; `release/package-manifest.json` records its byte sizes and SHA-256 checksums.
 
 | Artifact | Target | Format | Bytes | SHA-256 | Result |
 | --- | --- | --- | ---: | --- | --- |
-| `release/macos-arm64/cards-under-glass-0.1.0-mac-arm64.dmg` | macOS arm64 | DMG | 137,093,411 | `faec5ececfd3a054d2680f7a9e3e8fa60c18aac51fad6d17448663b8e42f5b18` | Built; Mach-O arm64 Electron and Sharp/libvips validated |
-| `release/macos-arm64/cards-under-glass-0.1.0-mac-arm64.zip` | macOS arm64 | ZIP | 137,254,015 | `e96808f7f44c86ae99b627b55fc33791309c2859ccf654c0c6a949ad2ec0a0bb` | Built; same validated app bundle |
-| `release/windows-x64/cards-under-glass-0.1.0-win-x64.exe` | Windows x64 | NSIS installer | 118,438,387 | `76d6cae705a90239e642b41e21064d2dbbbc371c2abce1ae14233fff467a1ec9` | Built; PE x64 Electron/Sharp runtime and current ASAR validated |
-| `release/linux-x64/cards-under-glass-0.1.0-linux-x86_64.AppImage` | Linux x64 | AppImage | 134,884,056 | `79dc388c5572a92175555dc06a9e05ef489ab1d70bc44e39677b62e3fbecb0bf` | Built; ELF x64 Electron and Sharp/libvips validated |
-| `release/linux-x64/cards-under-glass-0.1.0-linux-amd64.deb` | Linux x64 | DEB | 132,290,776 | `c662b103ef24569b1f6c74c1f8284173390879b09598dc066527f6567c94f0a8` | Built; same validated application payload |
+| `release/macos-arm64/cards-under-glass-0.1.0-mac-arm64.dmg` | macOS arm64 | DMG | 137,101,227 | `eaaf2ca93b0dd1c53b119e3b70f016de2c7f063c5b0e2890f70177eca8c9e0b0` | Built; Mach-O arm64 Electron and Sharp/libvips validated |
+| `release/macos-arm64/cards-under-glass-0.1.0-mac-arm64.zip` | macOS arm64 | ZIP | 137,259,205 | `5d9a29720762cfa892cb6b1befeff71db7e0e6730e9fce58f4e6934979a826ed` | Built; same validated app bundle |
+| `release/windows-x64/cards-under-glass-0.1.0-win-x64.exe` | Windows x64 | NSIS installer | 118,442,779 | `fc935db2f2baa8d48b2493726a52bc57b37aff50db5aab7c8a7cadffd16e1106` | Built; PE x64 Electron/Sharp runtime and current ASAR validated |
+| `release/linux-x64/cards-under-glass-0.1.0-linux-x86_64.AppImage` | Linux x64 | AppImage | 134,892,239 | `95ca26440275d4098d448131beeb3efa0299a72b37b4ecea4a6588671780efad` | Built; ELF x64 Electron and Sharp/libvips validated |
+| `release/linux-x64/cards-under-glass-0.1.0-linux-amd64.deb` | Linux x64 | DEB | 132,291,674 | `76cf514054e7ace781a796b5e49a11a014c0413bec869ae172f826cdd2092f35` | Built; same validated application payload |
 
-The validator also inspected every ASAR for package version/name plus current SQLite migration, Archive/Restore, Photos, Update Public Site and Rebuild Entire Site markers. Mac output contains only Darwin arm64 image binaries, Windows only PE x64 Sharp files, and Linux only ELF x64 Sharp/libvips files. Expected installers exist and no Sharp runtime is accidentally externalized or absent.
+The validator also inspected every ASAR for package version/name plus current SQLite migration, Archive/Restore, Photos, Update Public Site, Rebuild Public Site and multi-library snapshot/owner markers. Mac output contains only Darwin arm64 image binaries, Windows only PE x64 Sharp files, and Linux only ELF x64 Sharp/libvips files. Expected installers exist and no Sharp runtime is accidentally externalized or absent.
 
 ### Passed
 
@@ -76,9 +159,9 @@ Windows and Linux artifacts were built and structurally validated on macOS, not 
 5. Open Photos and confirm existing thumbnails and full-resolution viewing.
 6. Import a JPEG/PNG/WebP, view it, then relaunch and confirm Sharp-created thumbnail persistence.
 7. Create a test card and confirm its permanent ten-digit serial does not reuse a retired serial.
-8. Enter the 13 required grading values, finalize, edit a required grade, and verify changes-pending/re-finalization.
+8. Enter the 21 required grading values, finalize, edit a required grade, and verify changes-pending/re-finalization.
 9. Run **Update Public Site** into an empty folder and open the generated catalogue/report through an ordinary static server.
-10. Run Update again, verify unchanged reports are skipped, then exercise **Rebuild Entire Site**.
+10. Run Update again, verify unchanged reports are skipped, then exercise **Rebuild Public Site**.
 11. Close through the normal Windows close/Exit path while an autosave is pending; reopen and verify the edit persisted.
 12. Create a `.cug` archive, restore it into a new empty folder, open it, and verify cards, serial reservations, photos, defect links, and lazy thumbnails.
 

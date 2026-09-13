@@ -195,10 +195,14 @@ export class Library {
       cards.year, cards.language, cards.variant, cards.rarity, cards.manufacturer,
       inspections.centeringGrade, inspections.cornersGrade, inspections.edgesGrade,
       inspections.surfaceGrade, inspections.estimatedGrade,
-      inspections.verticalLeftTop, inspections.verticalLeftBottom,
-      inspections.verticalRightTop, inspections.verticalRightBottom,
-      inspections.horizontalUpperLeft, inspections.horizontalUpperRight,
-      inspections.horizontalLowerLeft, inspections.horizontalLowerRight,
+      inspections.frontVerticalLeftTop, inspections.frontVerticalLeftBottom,
+      inspections.frontVerticalRightTop, inspections.frontVerticalRightBottom,
+      inspections.frontHorizontalUpperLeft, inspections.frontHorizontalUpperRight,
+      inspections.frontHorizontalLowerLeft, inspections.frontHorizontalLowerRight,
+      inspections.backVerticalLeftTop, inspections.backVerticalLeftBottom,
+      inspections.backVerticalRightTop, inspections.backVerticalRightBottom,
+      inspections.backHorizontalUpperLeft, inspections.backHorizontalUpperRight,
+      inspections.backHorizontalLowerLeft, inspections.backHorizontalLowerRight,
       inspections.centeringNote, inspections.cornersNote, inspections.edgesNote, inspections.surfaceNote
       FROM cards JOIN inspections ON inspections.cardId=cards.id
       WHERE cards.status='finalized' AND cards.includePublic=1
@@ -220,10 +224,14 @@ export class Library {
       const inspection = {
         centeringGrade: Number(row.centeringGrade), cornersGrade: Number(row.cornersGrade), edgesGrade: Number(row.edgesGrade),
         surfaceGrade: Number(row.surfaceGrade), estimatedGrade: Number(row.estimatedGrade),
-        verticalLeftTop: Number(row.verticalLeftTop), verticalLeftBottom: Number(row.verticalLeftBottom),
-        verticalRightTop: Number(row.verticalRightTop), verticalRightBottom: Number(row.verticalRightBottom),
-        horizontalUpperLeft: Number(row.horizontalUpperLeft), horizontalUpperRight: Number(row.horizontalUpperRight),
-        horizontalLowerLeft: Number(row.horizontalLowerLeft), horizontalLowerRight: Number(row.horizontalLowerRight),
+        frontVerticalLeftTop: Number(row.frontVerticalLeftTop), frontVerticalLeftBottom: Number(row.frontVerticalLeftBottom),
+        frontVerticalRightTop: Number(row.frontVerticalRightTop), frontVerticalRightBottom: Number(row.frontVerticalRightBottom),
+        frontHorizontalUpperLeft: Number(row.frontHorizontalUpperLeft), frontHorizontalUpperRight: Number(row.frontHorizontalUpperRight),
+        frontHorizontalLowerLeft: Number(row.frontHorizontalLowerLeft), frontHorizontalLowerRight: Number(row.frontHorizontalLowerRight),
+        backVerticalLeftTop: Number(row.backVerticalLeftTop), backVerticalLeftBottom: Number(row.backVerticalLeftBottom),
+        backVerticalRightTop: Number(row.backVerticalRightTop), backVerticalRightBottom: Number(row.backVerticalRightBottom),
+        backHorizontalUpperLeft: Number(row.backHorizontalUpperLeft), backHorizontalUpperRight: Number(row.backHorizontalUpperRight),
+        backHorizontalLowerLeft: Number(row.backHorizontalLowerLeft), backHorizontalLowerRight: Number(row.backHorizontalLowerRight),
         centeringNote: row.centeringNote === null ? null : String(row.centeringNote),
         cornersNote: row.cornersNote === null ? null : String(row.cornersNote),
         edgesNote: row.edgesNote === null ? null : String(row.edgesNote),
@@ -237,6 +245,10 @@ export class Library {
         manufacturer: row.manufacturer === null ? null : String(row.manufacturer), inspection, markers, photos
       }
     })
+  }
+  hasReservedSerial(serial: string): boolean {
+    if (!/^\d{10}$/.test(serial) || serial === '0000000000') return false
+    return this.db.prepare('SELECT 1 FROM serial_reservations WHERE serial=?').get(serial) !== undefined
   }
   save(id: unknown, revision: unknown, value: unknown): Card {
     validateId(id)

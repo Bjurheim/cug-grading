@@ -7,11 +7,26 @@ export const gradeFields = {
   centeringGrade: 'Centering', cornersGrade: 'Corners', edgesGrade: 'Edges',
   surfaceGrade: 'Surface', estimatedGrade: 'Estimated Grade'
 } as const
+export const measurementPositions = {
+  verticalLeftTop: 'Top Left', verticalLeftBottom: 'Bottom Left',
+  verticalRightTop: 'Top Right', verticalRightBottom: 'Bottom Right',
+  horizontalUpperLeft: 'Upper Left', horizontalUpperRight: 'Upper Right',
+  horizontalLowerLeft: 'Lower Left', horizontalLowerRight: 'Lower Right'
+} as const
+export type MeasurementPosition = keyof typeof measurementPositions
+export type CenteringFace = 'front' | 'back'
+export function measurementKey(face: CenteringFace, position: MeasurementPosition): MeasurementField {
+  return `${face}${position[0].toUpperCase()}${position.slice(1)}` as MeasurementField
+}
 export const measurementFields = {
-  verticalLeftTop: 'Vertical Left — Top Left', verticalLeftBottom: 'Vertical Left — Bottom Left',
-  verticalRightTop: 'Vertical Right — Top Right', verticalRightBottom: 'Vertical Right — Bottom Right',
-  horizontalUpperLeft: 'Horizontal Upper — Upper Left', horizontalUpperRight: 'Horizontal Upper — Upper Right',
-  horizontalLowerLeft: 'Horizontal Lower — Lower Left', horizontalLowerRight: 'Horizontal Lower — Lower Right'
+  frontVerticalLeftTop: 'Front — Top Left', frontVerticalLeftBottom: 'Front — Bottom Left',
+  frontVerticalRightTop: 'Front — Top Right', frontVerticalRightBottom: 'Front — Bottom Right',
+  frontHorizontalUpperLeft: 'Front — Upper Left', frontHorizontalUpperRight: 'Front — Upper Right',
+  frontHorizontalLowerLeft: 'Front — Lower Left', frontHorizontalLowerRight: 'Front — Lower Right',
+  backVerticalLeftTop: 'Back — Top Left', backVerticalLeftBottom: 'Back — Bottom Left',
+  backVerticalRightTop: 'Back — Top Right', backVerticalRightBottom: 'Back — Bottom Right',
+  backHorizontalUpperLeft: 'Back — Upper Left', backHorizontalUpperRight: 'Back — Upper Right',
+  backHorizontalLowerLeft: 'Back — Lower Left', backHorizontalLowerRight: 'Back — Lower Right'
 } as const
 export const noteFields = {
   centeringNote: 'Centering note', cornersNote: 'Corners note', edgesNote: 'Edges note',
@@ -80,7 +95,7 @@ export interface PublicSiteGenerationSummary {
   rebuiltReports: number
 }
 export interface PublicSiteSettings { outputFolder: string | null }
-export interface PublicSiteGenerated extends PublicSiteGenerationSummary { outputFolder: string; reportCount: number; mode: PublicSiteGenerationMode }
+export interface PublicSiteGenerated extends PublicSiteGenerationSummary { outputFolder: string; reportCount: number; mode: PublicSiteGenerationMode; warnings: string[] }
 export type Result<T> = { ok: true; value: T } | { ok: false; error: string }
 export interface Api {
   info(): Promise<Result<LibraryInfo | null>>

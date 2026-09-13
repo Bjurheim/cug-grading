@@ -118,3 +118,13 @@ button:focus-visible,input:focus,textarea:focus,summary:focus-visible{outline:2p
 .photo-marker-row{display:grid;grid-template-columns:18px minmax(0,1fr);align-items:start;gap:5px;padding:3px}.photo-marker-row>input{margin:8px 0 0}.photo-marker-row>button{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:6px 8px;text-align:left;border-color:transparent;background:transparent}.photo-marker-row>button:hover:not(:disabled){background:#26352f;border-color:#3b5046}.photo-marker-row>button strong,.photo-marker-row>button small{display:block}.photo-marker-row>button small{color:#7d9187;margin-top:3px}.photo-marker-row>button>span:last-child{font-size:8px;color:#a8cdb9}
 @media(max-width:1380px){.additional-photo-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:1100px){.additional-photo-grid{grid-template-columns:1fr}}
+
+/* One centering assessment, with two stacked face measurement groups. */
+.centering-face .section-title{margin-top:12px}
+.centering-face .pair-grid{grid-auto-flow:column;grid-template-rows:repeat(2,auto)}
+@media(max-width:760px){.centering-face .pair-grid{grid-template-columns:1fr;grid-template-rows:none;grid-auto-flow:row}}
+.centering-face+.centering-face{border-top:1px solid #29343f;margin-top:22px;padding-top:8px}
+.measurement-label{display:flex;align-items:center;gap:7px;min-height:26px}
+.measurement-helper{width:19px;height:24px;flex:none;fill:none;stroke:currentColor;stroke-width:1;stroke-linecap:round;stroke-linejoin:round;color:#7d919d}
+.measurement-helper .helper-frame{opacity:.4}
+.measurement-helper path{stroke:#b0bfca;stroke-width:1.2}
